@@ -1,0 +1,9 @@
+# Runtime dependencies for the Riza Lambda image.
+# (Playwright + Chromium are provided by the base image; awslambdaric is installed
+# in the Dockerfile.)
+httpx>=0.27
+beautifulsoup4>=4.12
+lxml>=5.2
+SQLAlchemy>=2.0
+psycopg2-binary>=2.9
+boto3>=1.34

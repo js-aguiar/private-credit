@@ -1,0 +1,16 @@
+# Keep the Docker build context (repo root) small and reproducible.
+.git/
+.gitignore
+infra/
+scripts/
+**/__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.md
+cdk.out/
+.env
+.env.*
