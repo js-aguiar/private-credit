@@ -214,6 +214,11 @@ button.load-more:hover {
   display: block;
 }
 
+.status[hidden],
+.load-more[hidden] {
+  display: none;
+}
+
 .status {
   text-align: center;
   color: var(--muted);
