@@ -33,6 +33,7 @@ br-securitization-scrapers/
     vert/
   infra/             # AWS CDK (Python) app and stacks
   scripts/           # Local DB init + time-unlimited local runner
+  web/               # Document catalog UI (static) + read-only API Lambda
 ```
 
 ## Data model
@@ -68,6 +69,11 @@ python scripts/init_db.py
 # Run a scraper locally (no Lambda time limit). --once processes a single pass.
 python scripts/run_local.py ecoagro
 python scripts/run_local.py vert --max-items 20
+
+# Document catalog (read-only UI against the local DB)
+export DB_SSLMODE=disable   # required for a plain local Postgres
+python web/api/local.py                              # API on http://127.0.0.1:8081
+python -m http.server 8080 --directory web           # UI on http://127.0.0.1:8080
 ```
 
 ### Configuration (environment variables / SSM)
@@ -88,6 +94,7 @@ SSM Parameter Store (prefix set via `SSM_PREFIX`). Key settings:
 | `AUTO_CREATE_SCHEMA` | `false` | Create tables on startup if missing |
 | `DB_SECRET_ARN` | – | Secrets Manager ARN with DB credentials |
 | `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASSWORD` | – | Direct DB config (local) |
+| `DB_SSLMODE` | `require` | Use `disable` against a local Postgres without TLS |
 | `SSM_PREFIX` | – | e.g. `/br-sec-scrapers/ecoagro/` |
 
 The delay is deliberately a "sufficient" pause (tunable per site) rather than a fixed
@@ -105,8 +112,15 @@ cdk deploy --all
 This provisions: a VPC (with a low-cost NAT instance), an RDS PostgreSQL
 `db.t4g.micro` (single-AZ, private), four Lambda container functions (built from
 `scrapers/*/Dockerfile`), IAM roles, SSM parameters, CloudWatch log groups + error
-alarms, an SNS topic for alerts, and **EventBridge Scheduler** schedules that invoke
-each scraper twice daily.
+alarms, an SNS topic for alerts, **EventBridge Scheduler** schedules that invoke
+each scraper twice daily, and a **document catalog** (private S3 + CloudFront
+HTTPS + API Gateway HTTP API + VPC Lambda).
+
+The catalog URL is the `CatalogUrl` CloudFormation output
+(`https://<distribution>.cloudfront.net`). The browser never talks to RDS: CloudFront
+serves the static UI and proxies `/api/*` to a read-only Lambda that connects to
+Postgres over TLS (`DB_SSLMODE=require`) using Secrets Manager. The site is public
+and SELECT-only.
 
 ### Daily schedule
 
@@ -145,6 +159,21 @@ Manual invoke still works at any time:
 ```bash
 aws lambda invoke --function-name br-sec-scrapers-ecoagro /tmp/ecoagro.json
 ```
+
+## Document catalog
+
+The catalog lists rows from `documentos` joined to `emissoes`:
+
+| Filter / column | Database field |
+| --- | --- |
+| Company | `emissoes.devedor`, falling back to `emissoes.operacao` |
+| Date | `documentos.data_documento` |
+| Securitization company | `documentos.fonte` |
+| Document type | `documentos.tipo_documento` |
+
+List rows show company, date, and document type. Clicking a row opens a detail sheet
+with the document URL and remaining fields. Local development uses
+`python web/api/local.py` (port 8081) plus `python -m http.server 8080 --directory web`.
 
 ## Incremental & re-check behavior
 

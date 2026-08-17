@@ -78,3 +78,7 @@ CREATE TABLE IF NOT EXISTS documentos (
 
 CREATE INDEX IF NOT EXISTS ix_documentos_emissao_id ON documentos (emissao_id);
 CREATE INDEX IF NOT EXISTS ix_documentos_isin       ON documentos (isin);
+CREATE INDEX IF NOT EXISTS ix_documentos_fonte      ON documentos (fonte);
+CREATE INDEX IF NOT EXISTS ix_documentos_tipo       ON documentos (tipo_documento);
+CREATE INDEX IF NOT EXISTS ix_documentos_data       ON documentos (data_documento);
+CREATE INDEX IF NOT EXISTS ix_emissoes_devedor      ON emissoes (devedor);

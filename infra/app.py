@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """AWS CDK application entrypoint.
 
-Provisions the scraping infrastructure across five stacks:
+Provisions the scraping infrastructure across six stacks:
   - network     : VPC + low-cost NAT instance
   - database    : RDS PostgreSQL (db.t4g.micro, single-AZ, private)
   - scrapers    : four Lambda container functions + IAM + SSM tunables
   - schedule    : EventBridge Scheduler (10:00 and 18:00 America/Sao_Paulo)
+  - web         : S3 + CloudFront catalog UI and read-only VPC Lambda API
   - monitoring  : CloudWatch alarms + SNS alerts
 """
 
@@ -20,6 +21,7 @@ from stacks.monitoring_stack import MonitoringStack
 from stacks.network_stack import NetworkStack
 from stacks.schedule_stack import ScheduleStack
 from stacks.scrapers_stack import ScrapersStack
+from stacks.web_stack import WebStack
 
 
 def _context_bool(app: cdk.App, key: str, default: bool) -> bool:
@@ -73,6 +75,15 @@ ScheduleStack(
     functions=scrapers.functions,
     schedules_enabled=schedules_enabled,
     stagger_minutes=schedule_stagger_minutes,
+    env=env,
+)
+
+WebStack(
+    app,
+    f"{prefix}-web",
+    prefix=prefix,
+    vpc=network.vpc,
+    database=database,
     env=env,
 )
 
