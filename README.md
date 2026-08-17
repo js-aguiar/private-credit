@@ -9,8 +9,8 @@ tables whose names/columns are in Portuguese (matching the terminology used by t
 websites): `emissoes`, `series`, and `documentos`.
 
 Infrastructure is defined with **AWS CDK (Python)**; each scraper runs as an **AWS
-Lambda container image**. Scheduling/automation is intentionally **not** provisioned
-(per project scope) — the scrapers are deployable and runnable on demand.
+Lambda container image**. After an initial local backfill, **EventBridge Scheduler**
+invokes the Lambdas twice daily at 10:00 and 18:00 America/Sao_Paulo (GMT-3).
 
 ## Target sites
 
@@ -105,11 +105,46 @@ cdk deploy --all
 This provisions: a VPC (with a low-cost NAT instance), an RDS PostgreSQL
 `db.t4g.micro` (single-AZ, private), four Lambda container functions (built from
 `scrapers/*/Dockerfile`), IAM roles, SSM parameters, CloudWatch log groups + error
-alarms, and an SNS topic for alerts. **No schedule is created** — invoke the Lambdas
-manually (or wire your own trigger later).
+alarms, an SNS topic for alerts, and **EventBridge Scheduler** schedules that invoke
+each scraper twice daily.
 
-The initial full backfill is best run with `scripts/run_local.py` (no 15-minute limit);
-afterwards, incremental daily invocations of the Lambdas stay well within the limit.
+### Daily schedule
+
+EventBridge Scheduler (timezone `America/Sao_Paulo`, GMT-3) invokes each Lambda at
+**10:00 and 18:00**, with a default **5-minute stagger** so the shared NAT instance
+and RDS are not hit by all four scrapers at once:
+
+| Function | 10h slot | 18h slot |
+| --- | --- | --- |
+| `ecoagro` | 10:00 | 18:00 |
+| `opea` | 10:05 | 18:05 |
+| `riza` | 10:10 | 18:10 |
+| `vert` | 10:15 | 18:15 |
+
+Daily runs only invoke the existing handlers (idempotent upserts). Schema is **not**
+auto-created on Lambda (`AUTO_CREATE_SCHEMA=false`); create tables once with
+`scripts/init_db.py` (or the first local backfill).
+
+The **initial full backfill** is still best run with `scripts/run_local.py` (no
+15-minute Lambda limit). After that, these incremental scheduled invocations stay
+well within the limit.
+
+Override at deploy time (or in `infra/cdk.json`):
+
+```bash
+# Disable all schedules (manual invoke only)
+cdk deploy --all -c schedules_enabled=false
+
+# Fire all four at exactly 10:00 and 18:00 (no stagger)
+cdk deploy --all -c schedule_stagger_minutes=0
+```
+
+You can also disable individual schedules in the EventBridge Scheduler console.
+Manual invoke still works at any time:
+
+```bash
+aws lambda invoke --function-name br-sec-scrapers-ecoagro /tmp/ecoagro.json
+```
 
 ## Incremental & re-check behavior
 
