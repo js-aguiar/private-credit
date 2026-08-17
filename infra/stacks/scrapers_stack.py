@@ -4,7 +4,7 @@ Each function runs in the private-with-egress subnets (internet via the NAT inst
 database via the RDS security group), reads its DB credentials from Secrets Manager, and
 reads runtime tunables (delay, rate cap, ...) from SSM Parameter Store.
 
-No schedule is created here; invoke the functions on demand.
+Schedules live in ``ScheduleStack``; this stack only defines the functions.
 """
 
 from __future__ import annotations
