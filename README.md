@@ -18,7 +18,7 @@ invokes the Lambdas twice daily at 10:00 and 18:00 America/Sao_Paulo (GMT-3).
 | --- | --- | --- | --- |
 | `ecoagro` | https://ecoagro.agr.br/emissoes | Server-rendered HTML (paginated) | `httpx` + BeautifulSoup |
 | `opea` | https://app.opea.com.br/pt/emissoes | Vue/Vite SPA (JSON API) | API-first, Playwright fallback |
-| `riza` | https://investidor.rizasec.com/emissoes | Next.js SPA (JSON API) | API-first, Playwright fallback |
+| `riza` | https://investidor.rizasec.com/emissoes | Next.js SPA (JSON API) | Virgo BFF API via httpx |
 | `vert` | https://data.vert-capital.app/ | React-Router SPA (JSON API) | API-first, Playwright fallback |
 
 ## Repository layout
