@@ -153,7 +153,9 @@ class VertScraper(BaseScraper):
                     isin=(item.get("codeIsin") or "").strip() or None,
                     numero_emissao=emissao.numero_emissao,
                     codigo_cetip=(item.get("codeCetip") or "").strip() or None,
-                    remuneracao=str(item.get("tax")).strip() if item.get("tax") is not None else None,
+                    remuneracao=(
+                        str(item.get("tax")).strip() if item.get("tax") is not None else None
+                    ),
                     indexador=(item.get("typeName") or item.get("taxType") or "").strip() or None,
                     data_vencimento=parse_br_date(str(item.get("due_date") or "")[:10]),
                     extras={
@@ -205,7 +207,9 @@ class VertScraper(BaseScraper):
                     doc = self._map_document(item, emissao)
                     if doc is None:
                         continue
-                    dedupe_key = str((doc.extras or {}).get("vert_document_id") or doc.link_documento)
+                    dedupe_key = str(
+                        (doc.extras or {}).get("vert_document_id") or doc.link_documento
+                    )
                     if dedupe_key in seen:
                         continue
                     seen.add(dedupe_key)
@@ -232,7 +236,9 @@ class VertScraper(BaseScraper):
             tipo_documento=item.get("category"),
             data_documento=parse_br_date(str(item.get("referenceDate") or "")[:10]),
             numero_emissao=emissao.numero_emissao,
-            codigo_cetip=(emissao.codigos_cetip or "").split()[0] if emissao.codigos_cetip else None,
+            codigo_cetip=(
+                (emissao.codigos_cetip or "").split()[0] if emissao.codigos_cetip else None
+            ),
             extras={**item, "vert_document_id": doc_id},
         )
 
