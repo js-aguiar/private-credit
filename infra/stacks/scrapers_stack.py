@@ -28,6 +28,7 @@ SCRAPER_SPECS: dict[str, dict] = {
     "opea": {"dockerfile": "scrapers/opea/Dockerfile", "memory": 2048, "browser": "true", "ephemeral_mb": 2048},
     "riza": {"dockerfile": "scrapers/riza/Dockerfile", "memory": 2048, "browser": "true", "ephemeral_mb": 2048},
     "vert": {"dockerfile": "scrapers/vert/Dockerfile", "memory": 3008, "browser": "true", "ephemeral_mb": 3072},
+    "bari": {"dockerfile": "scrapers/bari/Dockerfile", "memory": 1024, "browser": "false", "ephemeral_mb": 512},
 }
 
 # Default runtime tunables published to SSM (editable in the console without redeploy).

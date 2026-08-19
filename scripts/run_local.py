@@ -28,6 +28,7 @@ SCRAPERS: dict[str, tuple[str, str]] = {
     "opea": ("scrapers.opea.scraper", "OpeaScraper"),
     "riza": ("scrapers.riza.scraper", "RizaScraper"),
     "vert": ("scrapers.vert.scraper", "VertScraper"),
+    "bari": ("scrapers.bari.scraper", "BariScraper"),
 }
 
 

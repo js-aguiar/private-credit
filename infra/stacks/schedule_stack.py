@@ -15,7 +15,7 @@ from aws_cdk import aws_scheduler_targets as targets
 from constructs import Construct
 
 # Stable order so stagger minutes stay predictable across synths.
-_SCRAPER_ORDER = ("ecoagro", "opea", "riza", "vert")
+_SCRAPER_ORDER = ("ecoagro", "opea", "riza", "vert", "bari")
 
 
 class ScheduleStack(Stack):
