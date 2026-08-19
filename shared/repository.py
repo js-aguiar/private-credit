@@ -10,11 +10,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from .models import Documento, Emissao, Serie
+from .opea_documents import normalize_opea_document_url, opea_file_id
 from .records import DocumentoData, EmissaoData, SerieData
 
 _EMISSAO = Emissao.__table__
@@ -134,12 +135,37 @@ def upsert_serie(session: Session, emissao_id: int, fonte: str, data: SerieData)
     session.execute(stmt)
 
 
-def upsert_documento(session: Session, emissao_id: int, fonte: str, data: DocumentoData) -> None:
-    """Insert a document if new (dedup by link); refresh metadata if it already exists.
+def _resolve_canonical_emissao_id(
+    session: Session,
+    fonte: str,
+    numero_emissao: str | None,
+    fallback_emissao_id: int,
+) -> int:
+    """Pick one emission row for shared multi-série documents (lowest emissao_id)."""
+    if not numero_emissao:
+        return fallback_emissao_id
+    canonical = session.scalar(
+        select(func.min(Emissao.emissao_id)).where(
+            Emissao.fonte == fonte,
+            Emissao.numero_emissao == numero_emissao,
+        )
+    )
+    return int(canonical) if canonical is not None else fallback_emissao_id
 
-    ``data_insercao`` is deliberately never updated so it always reflects when the
-    document was first added to the table.
-    """
+
+def _prepare_documento_values(
+    emissao_id: int,
+    fonte: str,
+    data: DocumentoData,
+) -> tuple[dict, str | None]:
+    """Normalize Opea links/ids and attach shared docs to the canonical emission."""
+    link = data.link_documento
+    id_origem_arquivo = data.id_origem_arquivo
+
+    if fonte == "opea":
+        link = normalize_opea_document_url(link)
+        id_origem_arquivo = id_origem_arquivo or opea_file_id(data.extras)
+
     values = {
         "emissao_id": emissao_id,
         "fonte": fonte,
@@ -148,24 +174,58 @@ def upsert_documento(session: Session, emissao_id: int, fonte: str, data: Docume
         "codigo_cetip": data.codigo_cetip,
         "titulo": data.titulo,
         "tipo_documento": data.tipo_documento,
-        "link_documento": data.link_documento,
+        "link_documento": link,
+        "id_origem_arquivo": id_origem_arquivo,
         "data_documento": data.data_documento,
         "extras": data.extras or {},
     }
+    return values, id_origem_arquivo
+
+
+def upsert_documento(session: Session, emissao_id: int, fonte: str, data: DocumentoData) -> None:
+    """Insert a document if new; refresh metadata if it already exists.
+
+    Opea documents dedupe globally by ``(fonte, id_origem_arquivo)`` using the stable
+    cedoc file UUID. Presigned S3 URLs are normalized to the object path before storage.
+    Shared multi-série files are stored once under the canonical emission (lowest
+    ``emissao_id`` for the same ``fonte`` + ``numero_emissao``).
+
+    Other sources keep deduping by ``(emissao_id, link_documento)``.
+
+    ``data_insercao`` is deliberately never updated so it always reflects when the
+    document was first added to the table.
+    """
+    target_emissao_id = emissao_id
+    if fonte == "opea":
+        target_emissao_id = _resolve_canonical_emissao_id(
+            session, fonte, data.numero_emissao, emissao_id
+        )
+
+    values, id_origem_arquivo = _prepare_documento_values(target_emissao_id, fonte, data)
     stmt = insert(_DOCUMENTO).values(**values)
     update_set = {
+        "emissao_id": stmt.excluded.emissao_id,
         "isin": stmt.excluded.isin,
         "numero_emissao": stmt.excluded.numero_emissao,
         "codigo_cetip": stmt.excluded.codigo_cetip,
         "titulo": stmt.excluded.titulo,
         "tipo_documento": stmt.excluded.tipo_documento,
+        "link_documento": stmt.excluded.link_documento,
         "data_documento": stmt.excluded.data_documento,
         "extras": _DOCUMENTO.c.extras.op("||")(stmt.excluded.extras),
         "atualizado_em": _now(),
     }
-    stmt = stmt.on_conflict_do_update(
-        constraint="uq_documentos_emissao_link", set_=update_set
-    )
+
+    if id_origem_arquivo:
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["fonte", "id_origem_arquivo"],
+            index_where=text("id_origem_arquivo IS NOT NULL"),
+            set_=update_set,
+        )
+    else:
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_documentos_emissao_link", set_=update_set
+        )
     session.execute(stmt)
 
 

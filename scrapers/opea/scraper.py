@@ -20,6 +20,7 @@ import re
 from typing import Any
 
 from shared.mapping import pick
+from shared.opea_documents import normalize_opea_document_url, opea_file_id
 from shared.parsing import parse_br_date
 from shared.records import DetailResult, DocumentoData, EmissaoData, SerieData
 from shared.scraper_base import BaseScraper
@@ -213,7 +214,7 @@ class OpeaScraper(BaseScraper):
                 continue
             docs.append(
                 DocumentoData(
-                    link_documento=url,
+                    link_documento=normalize_opea_document_url(url),
                     titulo=name,
                     tipo_documento=child.get("categoryName"),
                     data_documento=parse_br_date(str(child.get("createdOn") or "")[:10]),
@@ -221,6 +222,7 @@ class OpeaScraper(BaseScraper):
                     codigo_cetip=(emissao.codigos_cetip or "").split()[0]
                     if emissao.codigos_cetip
                     else None,
+                    id_origem_arquivo=opea_file_id(child),
                     extras=child,
                 )
             )

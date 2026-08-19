@@ -65,9 +65,10 @@ CREATE TABLE IF NOT EXISTS documentos (
     isin           VARCHAR(20),
     numero_emissao VARCHAR(50),
     codigo_cetip   VARCHAR(30),
-    titulo         TEXT,
-    tipo_documento VARCHAR(120),
-    link_documento TEXT        NOT NULL,
+    titulo             TEXT,
+    tipo_documento     VARCHAR(120),
+    link_documento     TEXT        NOT NULL,
+    id_origem_arquivo  VARCHAR(255),
     data_documento DATE,
     data_insercao  TIMESTAMPTZ NOT NULL DEFAULT now(),
     extras         JSONB       NOT NULL DEFAULT '{}'::jsonb,
@@ -82,3 +83,6 @@ CREATE INDEX IF NOT EXISTS ix_documentos_fonte      ON documentos (fonte);
 CREATE INDEX IF NOT EXISTS ix_documentos_tipo       ON documentos (tipo_documento);
 CREATE INDEX IF NOT EXISTS ix_documentos_data       ON documentos (data_documento);
 CREATE INDEX IF NOT EXISTS ix_emissoes_devedor      ON emissoes (devedor);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_documentos_fonte_id_origem_arquivo
+    ON documentos (fonte, id_origem_arquivo)
+    WHERE id_origem_arquivo IS NOT NULL;

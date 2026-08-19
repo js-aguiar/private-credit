@@ -180,7 +180,10 @@ with the document URL and remaining fields. Local development uses
 - Discovery upserts the emission list; new operations start with `detalhes_coletados = false`.
 - Every run also re-opens existing operations (oldest `ultima_verificacao_detalhe` first)
   and re-parses the full document list, so **new documents on old emissions are captured**.
-- All writes are idempotent upserts; documents dedupe by `link_documento`.
+- All writes are idempotent upserts. Opea documents dedupe by stable cedoc file id
+  (`id_origem_arquivo` / `extras.id`); other sources dedupe by `(emissao_id, link_documento)`.
+- To remove existing Opea duplicates: `python3 scripts/dedupe_opea_documents.py` (or invoke
+  the Opea Lambda with `{"action": "dedupe_opea_documents"}`).
 
 ## Legal / operational note
 
