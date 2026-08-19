@@ -59,11 +59,16 @@ class ScrapersStack(Stack):
             description="Scraper Lambdas",
             allow_all_outbound=True,
         )
-        # Permit the Lambdas to reach the database.
-        database.security_group.add_ingress_rule(
-            self.lambda_security_group,
-            ec2.Port.tcp(5432),
-            "Scraper Lambdas to PostgreSQL",
+        # Ingress lives in this stack (not DatabaseStack) to avoid a cyclic export.
+        ec2.CfnSecurityGroupIngress(
+            self,
+            "ScrapersToPostgres",
+            ip_protocol="tcp",
+            from_port=5432,
+            to_port=5432,
+            group_id=database.security_group.security_group_id,
+            source_security_group_id=self.lambda_security_group.security_group_id,
+            description="Scraper Lambdas to PostgreSQL",
         )
 
         self.functions: dict[str, lambda_.DockerImageFunction] = {}
