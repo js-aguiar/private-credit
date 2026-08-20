@@ -124,11 +124,19 @@ class BackfillStack(Stack):
         role.add_to_policy(
             iam.PolicyStatement(
                 actions=[
+                    "ec2:DescribeInstances",
+                    "ec2:DescribeVolumes",
+                    "ec2:DescribeTags",
+                ],
+                resources=["*"],
+            )
+        )
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=[
                     "ec2:TerminateInstances",
                     "ec2:DeleteVolume",
                     "ec2:DetachVolume",
-                    "ec2:DescribeInstances",
-                    "ec2:DescribeVolumes",
                 ],
                 resources=["*"],
                 conditions={

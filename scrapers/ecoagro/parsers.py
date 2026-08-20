@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from shared.html_utils import extract_document_links, soupify
+from shared.html_utils import absolute_url, extract_document_links, soupify
 from shared.parsing import (
     clean_text,
     extract_cetip_codes,
@@ -22,6 +22,11 @@ from shared.records import DocumentoData, EmissaoData
 FONTE = "ecoagro"
 _PAGE_RE = re.compile(r"[?&]page=(\d+)")
 _SERIE_SPLIT_RE = re.compile(r"[-,/;\s]+")
+_IGNORE_URL_FRAGMENTS = (
+    "politica-de-privacidade",
+    "politica-de-cookies",
+    "/wp/wp-content/",
+)
 
 
 def _cell_text(cells: list, index: int) -> str | None:
@@ -73,14 +78,25 @@ def parse_listing_rows(html: str, base_url: str, detail_template: str) -> list[E
 
 
 def parse_detail(html: str, base_url: str) -> tuple[dict, list[DocumentoData]]:
-    """Best-effort detail extraction: documents + any obvious extra fields.
-
-    The exact detail-page structure can vary; we defensively collect every document-like
-    link and stash a few labelled fields into ``extras`` so nothing is lost.
-    """
+    """Extract documents and labelled extras from an emissoes-integra page."""
     soup = soupify(html)
     documentos: list[DocumentoData] = []
-    for titulo, url in extract_document_links(soup, base_url):
+    seen: set[str] = set()
+
+    for item in soup.select("div.documents__item"):
+        anchor = item.select_one("a[href]")
+        if anchor is None:
+            continue
+        url = absolute_url(base_url, anchor.get("href"))
+        if not url or url in seen or _should_ignore_doc_url(url):
+            continue
+        title_el = item.select_one("p")
+        titulo = clean_text(title_el.get_text(" ")) if title_el else None
+        if not titulo or titulo.lower() == "baixar":
+            titulo = clean_text(anchor.get("title")) or clean_text(anchor.get_text())
+            if titulo and titulo.lower() == "baixar":
+                titulo = None
+        seen.add(url)
         documentos.append(
             DocumentoData(
                 link_documento=url,
@@ -90,6 +106,26 @@ def parse_detail(html: str, base_url: str) -> tuple[dict, list[DocumentoData]]:
             )
         )
 
+    # Fallback: leftover file links inside the documents section only (not site footer).
+    section = soup.select_one("section.documents") or soup.select_one(".documents")
+    if section is not None:
+        for titulo, url in extract_document_links(section, base_url):
+            if not url or url in seen or _should_ignore_doc_url(url):
+                continue
+            if "/public/storage/" not in url.lower():
+                continue
+            seen.add(url)
+            if titulo and titulo.lower() == "baixar":
+                titulo = None
+            documentos.append(
+                DocumentoData(
+                    link_documento=url,
+                    titulo=titulo,
+                    tipo_documento=_guess_doc_type(titulo, url),
+                    data_documento=parse_br_date(titulo) if titulo else None,
+                )
+            )
+
     updates: dict = {}
     extras = _extract_labelled_fields(soup)
     if extras:
@@ -97,10 +133,16 @@ def parse_detail(html: str, base_url: str) -> tuple[dict, list[DocumentoData]]:
     return updates, documentos
 
 
+def _should_ignore_doc_url(url: str) -> bool:
+    lowered = url.lower()
+    return any(fragment in lowered for fragment in _IGNORE_URL_FRAGMENTS)
+
+
 def _guess_doc_type(titulo: str | None, url: str) -> str | None:
     text = f"{titulo or ''} {url}".lower()
     for label, keywords in {
         "termo_securitizacao": ["termo de securit", "termo_de_securit"],
+        "anuncio_inicio": ["anúncio de início", "anuncio de inicio", "anúncio de inicio"],
         "prospecto": ["prospecto"],
         "relatorio": ["relatorio", "relatório"],
         "boletim": ["boletim"],

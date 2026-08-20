@@ -55,8 +55,33 @@ export DB_SECRET_ARN DB_NAME DB_SSLMODE=require
 export SSM_PREFIX USE_BROWSER_FALLBACK AUTO_CREATE_SCHEMA=false LOG_LEVEL=INFO
 export RUN_ID="${RUN_ID:-$(uuidgen)}"
 
+# Prefer explicit env; otherwise read the instance tag "backfill_sources".
+if [[ -z "${BACKFILL_SOURCES:-}" ]]; then
+  TOKEN=$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 60" || true)
+  if [[ -n "${TOKEN}" ]]; then
+    INSTANCE_ID=$(curl -sf -H "X-aws-ec2-metadata-token: ${TOKEN}" \
+      http://169.254.169.254/latest/meta-data/instance-id || true)
+    if [[ -n "${INSTANCE_ID}" ]]; then
+      BACKFILL_SOURCES=$(aws ec2 describe-tags \
+        --region "${AWS_REGION}" \
+        --filters "Name=resource-id,Values=${INSTANCE_ID}" "Name=key,Values=backfill_sources" \
+        --query 'Tags[0].Value' --output text 2>/dev/null || true)
+      if [[ "${BACKFILL_SOURCES}" == "None" ]]; then
+        BACKFILL_SOURCES=""
+      fi
+    fi
+  fi
+fi
+export BACKFILL_SOURCES="${BACKFILL_SOURCES:-}"
+
+BACKFILL_ARGS=()
+if [[ -n "${BACKFILL_SOURCES}" ]]; then
+  BACKFILL_ARGS+=(--sources "${BACKFILL_SOURCES}")
+fi
+
 set +e
-timeout "${BACKFILL_MAX_SECONDS}s" python3.12 scripts/run_backfill_all.py \
+timeout "${BACKFILL_MAX_SECONDS}s" python3.12 scripts/run_backfill_all.py "${BACKFILL_ARGS[@]}" \
   | tee "${LOG_DIR}/run.log"
 run_status=$?
 set -e

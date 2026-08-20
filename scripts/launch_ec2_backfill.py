@@ -41,6 +41,11 @@ def main() -> int:
         "--launch-template-version",
         default=os.getenv("BACKFILL_LAUNCH_TEMPLATE_VERSION", "$Latest"),
     )
+    parser.add_argument(
+        "--sources",
+        default=os.getenv("BACKFILL_SOURCES"),
+        help="Comma-separated scrapers to run (stored on instance tag backfill_sources).",
+    )
     parser.add_argument("--run-id", default=str(uuid.uuid4()))
     args = parser.parse_args()
 
@@ -51,6 +56,16 @@ def main() -> int:
     lt_id = args.launch_template_id or _stack_output(cf, args.stack, "LaunchTemplateId")
     log_group = _stack_output(cf, args.stack, "LogGroupName")
     subnet_id = _stack_output(cf, args.stack, "BackfillSubnetId")
+
+    sources = (args.sources or "").strip()
+    name_suffix = sources.replace(",", "-") if sources else "all"
+    tags = [
+        {"Key": "Name", "Value": f"{args.stack}-{name_suffix}"},
+        {"Key": "br-sec-scrapers:backfill", "Value": "owned"},
+        {"Key": "run_id", "Value": args.run_id},
+    ]
+    if sources:
+        tags.append({"Key": "backfill_sources", "Value": sources})
 
     response = ec2.run_instances(
         LaunchTemplate={
@@ -63,11 +78,7 @@ def main() -> int:
         TagSpecifications=[
             {
                 "ResourceType": "instance",
-                "Tags": [
-                    {"Key": "Name", "Value": f"{args.stack}-run"},
-                    {"Key": "br-sec-scrapers:backfill", "Value": "owned"},
-                    {"Key": "run_id", "Value": args.run_id},
-                ],
+                "Tags": tags,
             }
         ],
     )
@@ -77,6 +88,7 @@ def main() -> int:
     result = {
         "instance_id": instance_id,
         "run_id": args.run_id,
+        "sources": sources or "all",
         "launch_template_id": lt_id,
         "log_group": log_group,
         "region": region,

@@ -107,16 +107,36 @@ def _run_source(source: str, deadline: float, logger) -> dict:
     return totals
 
 
+def _resolve_sources(requested: str | None) -> list[str]:
+    """Return ordered scraper names from a comma-separated request (or full order)."""
+    if not requested or not requested.strip():
+        return list(SCRAPER_ORDER)
+    wanted = {part.strip().lower() for part in requested.split(",") if part.strip()}
+    unknown = wanted - set(SCRAPERS)
+    ordered = [name for name in SCRAPER_ORDER if name in wanted]
+    if unknown:
+        raise SystemExit(f"Unknown scraper source(s): {', '.join(sorted(unknown))}")
+    if not ordered:
+        raise SystemExit("No valid scrapers selected via --sources / BACKFILL_SOURCES")
+    return ordered
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run all scrapers for EC2/RDS backfill.")
+    parser = argparse.ArgumentParser(description="Run scrapers for EC2/RDS backfill.")
     parser.add_argument(
         "--max-seconds",
         type=int,
         default=int(os.getenv("BACKFILL_MAX_SECONDS", "86400")),
         help="Global wall-clock budget (default 24h).",
     )
+    parser.add_argument(
+        "--sources",
+        default=os.getenv("BACKFILL_SOURCES"),
+        help="Comma-separated scrapers to run (default: all).",
+    )
     args = parser.parse_args()
 
+    sources = _resolve_sources(args.sources)
     run_id = os.getenv("RUN_ID") or str(uuid.uuid4())
     configure_logging()
     bind_run_context(execution_mode="ec2_backfill", run_id=run_id)
@@ -129,16 +149,13 @@ def main() -> int:
         "backfill_start",
         extra={
             "max_seconds": args.max_seconds,
-            "scrapers": list(SCRAPER_ORDER),
+            "scrapers": sources,
             "ssm_prefix": os.getenv("SSM_PREFIX"),
         },
     )
 
     per_source: dict[str, dict] = {}
-    for source in SCRAPER_ORDER:
-        if source not in SCRAPERS:
-            logger.warning("backfill_skip_unknown", extra={"source": source})
-            continue
+    for source in sources:
         if time.monotonic() >= deadline:
             logger.info("backfill_deadline_reached_before_source", extra={"source": source})
             break
