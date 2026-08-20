@@ -49,6 +49,17 @@ class TimeBudget:
         return self.remaining_ms() > self._reserve_ms
 
 
+class DeadlineTimeBudget(TimeBudget):
+    """Hard monotonic deadline for long-running hosts (e.g. EC2 backfill)."""
+
+    def __init__(self, deadline_monotonic: float, reserve_ms: int = 90_000):
+        super().__init__(context=None, reserve_ms=reserve_ms)
+        self._deadline = deadline_monotonic
+
+    def remaining_ms(self) -> float:
+        return max(0.0, (self._deadline - time.monotonic()) * 1000.0)
+
+
 class BaseScraper(ABC):
     source_name: str = "base"
 

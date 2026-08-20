@@ -253,3 +253,12 @@ def count_emissoes(session: Session, fonte: str) -> int:
     return session.execute(
         select(func.count()).select_from(Emissao).where(Emissao.fonte == fonte)
     ).scalar_one()
+
+
+def count_emissoes_sem_detalhe(session: Session, fonte: str) -> int:
+    """Count emissions that have never had detail pages collected."""
+    return session.execute(
+        select(func.count())
+        .select_from(Emissao)
+        .where(Emissao.fonte == fonte, Emissao.detalhes_coletados.is_(False))
+    ).scalar_one()

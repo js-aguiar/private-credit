@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from shared.lambda_invoke import log_invoke_start
 from shared.logging_config import configure_logging, get_logger
 
 from .scraper import OpeaScraper
@@ -19,7 +20,7 @@ def handler(event, context):
         logger.info("dedupe_opea_done", extra=payload)
         return {"statusCode": 200, "summary": payload}
 
-    logger.info("invoke_start")
+    log_invoke_start(logger, context, "opea")
     scraper = OpeaScraper.from_env(context=context)
     summary = scraper.run()
     return {"statusCode": 200, "summary": summary}
