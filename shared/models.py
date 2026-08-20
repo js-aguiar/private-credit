@@ -164,6 +164,7 @@ class Documento(Base):
     titulo: Mapped[str | None] = mapped_column(Text)
     tipo_documento: Mapped[str | None] = mapped_column(String(120))
     link_documento: Mapped[str] = mapped_column(Text, nullable=False)
+    id_origem_arquivo: Mapped[str | None] = mapped_column(String(255))
     data_documento: Mapped[date | None] = mapped_column(Date)
     # When this row was first added to the table (set once, on insert).
     data_insercao: Mapped[datetime] = mapped_column(

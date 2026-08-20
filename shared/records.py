@@ -59,6 +59,7 @@ class DocumentoData:
     isin: str | None = None
     numero_emissao: str | None = None
     codigo_cetip: str | None = None
+    id_origem_arquivo: str | None = None
     extras: dict = field(default_factory=dict)
 
 
