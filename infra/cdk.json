@@ -7,7 +7,7 @@
   "context": {
     "prefix": "br-sec-scrapers",
     "alert_email": "",
-    "schedules_enabled": true,
+    "schedules_enabled": false,
     "schedule_stagger_minutes": 5,
     "backfill_instance_type": "t4g.small",
     "backfill_max_hours": 24,

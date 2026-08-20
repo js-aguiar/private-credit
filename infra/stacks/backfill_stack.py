@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pathlib
 
-from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
+from aws_cdk import CfnOutput, RemovalPolicy, Stack
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_logs as logs
@@ -147,7 +147,7 @@ class BackfillStack(Stack):
             f"export AWS_REGION={self.region}",
             f"export CODE_BUCKET={code_asset.s3_bucket_name}",
             f"export CODE_KEY={code_asset.s3_object_key}",
-            f"export INSTALL_ROOT=/opt/br-sec-scrapers",
+            "export INSTALL_ROOT=/opt/br-sec-scrapers",
             f"export DB_SECRET_ARN={database.secret.secret_arn}",
             f"export DB_NAME={database.database_name}",
             f"export SSM_PREFIX={ssm_prefix}/",
