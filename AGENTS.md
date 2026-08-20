@@ -2,15 +2,15 @@
 
 ## Cursor Cloud specific instructions
 
-This repo is **BR Securitization Scrapers**: a set of Python 3.12 batch/CLI scrapers for four
-Brazilian securitization sites (`ecoagro`, `opea`, `riza`, `vert`) that upsert into a
+This repo is **BR Securitization Scrapers**: a set of Python 3.12 batch/CLI scrapers for five
+Brazilian securitization sites (`ecoagro`, `opea`, `riza`, `vert`, `bari`) that upsert into a
 PostgreSQL database (`emissoes`, `series`, `documentos`). There is **no long-running dev
 server** — "running the app" means invoking a scraper via `scripts/run_local.py`. Standard
 setup/run commands live in `README.md`; only non-obvious notes are captured below.
 
-### Product code lives on a feature branch
-The `main` branch contains only `LICENSE`. All application code is on `feat/br-scrapers`
-(and branches based on it). Do dev work against that branch.
+### Product code lives on `main`
+Application code is on `main` (historically developed on `feat/br-scrapers` and
+`scrapers-and-first-webpage`). Do dev work against `main` or a branch based on it.
 
 ### Environment (already provisioned by the update script + snapshot)
 - Python venv at `.venv/` — activate with `source .venv/bin/activate` before running anything.
@@ -31,8 +31,8 @@ fails against a plain local Postgres.
 - Init schema (idempotent): `python scripts/init_db.py`
 - Run a scraper: `python scripts/run_local.py ecoagro [--max-items N] [--create-schema]`
 - `ecoagro` is plain HTML (no browser needed) and is the most reliable end-to-end smoke test.
-  `opea` is API-first with a Playwright fallback; `riza` and `vert` use public JSON APIs
-  via httpx only (no browser).
+  `opea` is API-first with a Playwright fallback; `riza`, `vert`, and `bari` use public JSON
+  APIs via httpx only (no browser).
 - Scrapers require **outbound internet** to the live target sites; a run can succeed with
   `descobertas: 0` if a site's API/markup changed — that is product behavior, not an env failure.
 - The politeness throttle is slow by default (8s delay, 6 req/min). For quick local smoke tests

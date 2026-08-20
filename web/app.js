@@ -3,6 +3,7 @@ const FONTE_LABELS = {
   opea: "Opea",
   riza: "Riza",
   vert: "Vert",
+  bari: "Bari",
 };
 
 const PAGE_SIZE = 50;

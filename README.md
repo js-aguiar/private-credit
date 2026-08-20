@@ -1,6 +1,6 @@
 # BR Securitization Scrapers
 
-Daily, incremental scrapers for four Brazilian securitization ("securitizadoras") websites.
+Daily, incremental scrapers for five Brazilian securitization ("securitizadoras") websites.
 Each run **discovers new operations (emissions)** and **re-checks already-scraped
 operations for updated information** — especially newly published documents.
 
@@ -20,6 +20,7 @@ invokes the Lambdas twice daily at 10:00 and 18:00 America/Sao_Paulo (GMT-3).
 | `opea` | https://app.opea.com.br/pt/emissoes | Vue/Vite SPA (JSON API) | API-first, Playwright fallback |
 | `riza` | https://investidor.rizasec.com/emissoes | Next.js SPA (JSON API) | Virgo BFF API via httpx |
 | `vert` | https://data.vert-capital.app/ | React-Router SPA (JSON API) | API-first, Playwright fallback |
+| `bari` | https://barisec.com.br/emissoes | Next.js SSG + Strapi CMS API | `httpx` (Strapi list + SSG detail JSON) |
 
 ## Repository layout
 
@@ -31,6 +32,7 @@ br-securitization-scrapers/
     opea/
     riza/
     vert/
+    bari/
   infra/             # AWS CDK (Python) app and stacks
   scripts/           # Local DB init + time-unlimited local runner
   web/               # Document catalog UI (static) + read-only API Lambda
@@ -126,7 +128,7 @@ and SELECT-only.
 
 EventBridge Scheduler (timezone `America/Sao_Paulo`, GMT-3) invokes each Lambda at
 **10:00 and 18:00**, with a default **5-minute stagger** so the shared NAT instance
-and RDS are not hit by all four scrapers at once:
+and RDS are not hit by all five scrapers at once:
 
 | Function | 10h slot | 18h slot |
 | --- | --- | --- |
@@ -134,6 +136,7 @@ and RDS are not hit by all four scrapers at once:
 | `opea` | 10:05 | 18:05 |
 | `riza` | 10:10 | 18:10 |
 | `vert` | 10:15 | 18:15 |
+| `bari` | 10:20 | 18:20 |
 
 Daily runs only invoke the existing handlers (idempotent upserts). Schema is **not**
 auto-created on Lambda (`AUTO_CREATE_SCHEMA=false`); create tables once with
@@ -149,7 +152,7 @@ Override at deploy time (or in `infra/cdk.json`):
 # Disable all schedules (manual invoke only)
 cdk deploy --all -c schedules_enabled=false
 
-# Fire all four at exactly 10:00 and 18:00 (no stagger)
+# Fire all scrapers at exactly 10:00 and 18:00 (no stagger)
 cdk deploy --all -c schedule_stagger_minutes=0
 ```
 
