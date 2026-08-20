@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.python-version
+
+# Environment / secrets
+.env
+.env.*
+*.local
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# AWS CDK
+infra/cdk.out/
+cdk.out/
+*.tmp
+
+# Playwright
+playwright-report/
+.cache/ms-playwright/
+
+# Logs / local artifacts
+*.log
+tmp/
+scratch/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

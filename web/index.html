@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Documents</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true"></span>
+        <div>
+          <h1>Documents</h1>
+          <p>Brazilian securitization filings</p>
+        </div>
+      </div>
+      <p class="count" id="result-count">Loading…</p>
+    </header>
+
+    <main>
+      <form class="filters" id="filters" autocomplete="off">
+        <label>
+          <span>Company</span>
+          <input id="filter-company" name="company" list="company-options" placeholder="All companies" />
+          <datalist id="company-options"></datalist>
+        </label>
+        <label>
+          <span>Date from</span>
+          <input id="filter-from" name="date_from" type="date" />
+        </label>
+        <label>
+          <span>Date to</span>
+          <input id="filter-to" name="date_to" type="date" />
+        </label>
+        <label>
+          <span>Securitization company</span>
+          <select id="filter-fonte" name="fonte">
+            <option value="">All</option>
+          </select>
+        </label>
+        <label>
+          <span>Document type</span>
+          <select id="filter-type" name="type">
+            <option value="">All</option>
+          </select>
+        </label>
+        <div class="filter-actions">
+          <button type="submit">Filter</button>
+          <button type="button" class="ghost" id="reset-filters">Clear</button>
+        </div>
+      </form>
+
+      <section class="list-card" aria-live="polite">
+        <div class="list-head">
+          <span>Company</span>
+          <span>Date</span>
+          <span>Document type</span>
+        </div>
+        <ul class="list" id="document-list"></ul>
+        <p class="status" id="status" hidden></p>
+        <button type="button" class="load-more" id="load-more" hidden>Load more</button>
+      </section>
+    </main>
+
+    <div class="sheet" id="sheet" hidden>
+      <div class="sheet-backdrop" data-close="true"></div>
+      <aside class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+        <header>
+          <h2 id="sheet-title">Document</h2>
+          <button type="button" class="icon-close" data-close="true" aria-label="Close">×</button>
+        </header>
+        <div class="sheet-body" id="sheet-body"></div>
+      </aside>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
