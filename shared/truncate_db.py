@@ -47,6 +47,7 @@ def truncate_all_tables(config: ScraperConfig | None = None) -> TruncateSummary:
                 }
                 # FK ON DELETE CASCADE clears series + documentos with the parents.
                 conn.execute(text("DELETE FROM emissoes"))
+                conn.execute(text("DELETE FROM isin_contestados"))
                 conn.execute(text("ALTER SEQUENCE IF EXISTS emissoes_emissao_id_seq RESTART WITH 1"))
                 conn.execute(text("ALTER SEQUENCE IF EXISTS series_serie_id_seq RESTART WITH 1"))
                 conn.execute(

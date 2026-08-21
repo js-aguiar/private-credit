@@ -29,6 +29,16 @@ def handler(event, context):
         logger.info("truncate_all_done", extra=payload)
         return {"statusCode": 200, "summary": payload}
 
+    if isinstance(event, dict) and event.get("action") == "table_counts":
+        from shared.table_counts import get_table_counts
+
+        fonte = event.get("fonte")
+        logger.info("table_counts_start", extra={"fonte": fonte})
+        summary = get_table_counts(fonte=fonte)
+        payload = summary.__dict__
+        logger.info("table_counts_done", extra=payload)
+        return {"statusCode": 200, "summary": payload}
+
     log_invoke_start(logger, context, "opea")
     scraper = OpeaScraper.from_env(context=context)
     summary = scraper.run()
