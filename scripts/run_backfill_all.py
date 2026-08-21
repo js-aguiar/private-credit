@@ -20,7 +20,7 @@ import uuid
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from shared.config import ScraperConfig  # noqa: E402
-from shared.db import session_scope  # noqa: E402
+from shared.db import ensure_schema, session_scope  # noqa: E402
 from shared.logging_config import bind_run_context, configure_logging, get_logger  # noqa: E402
 from shared.repository import count_emissoes_sem_detalhe  # noqa: E402
 from shared.scraper_base import DeadlineTimeBudget  # noqa: E402
@@ -153,6 +153,11 @@ def main() -> int:
             "ssm_prefix": os.getenv("SSM_PREFIX"),
         },
     )
+
+    # Apply schema.sql once (CREATE IF NOT EXISTS) so new tables like isin_contestados
+    # exist on RDS even though per-batch runs keep auto_create_schema=False.
+    schema_config = ScraperConfig.from_env(sources[0])
+    ensure_schema(schema_config)
 
     per_source: dict[str, dict] = {}
     for source in sources:
