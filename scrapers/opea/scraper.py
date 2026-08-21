@@ -162,7 +162,7 @@ class OpeaScraper(BaseScraper):
         isin = detail.get("codigoIsin") or emissao.isin
         cetip = (detail.get("codigoCetipBbb") or "").strip() or emissao.codigos_cetip
         numero = emissao.numero_emissao
-        serie_num = str(detail.get("serie") or "").strip() or "1"
+        serie_num = _normalize_serie_numero(detail.get("serie"))
         if not (isin or cetip):
             return []
         remuneracao_obj = detail.get("remuneracao") or {}
@@ -227,6 +227,20 @@ class OpeaScraper(BaseScraper):
                 )
             )
         return docs
+
+
+def _normalize_serie_numero(value: Any) -> str:
+    """Normalize API série numbers like ``1.0`` → ``1``."""
+    raw = str(value or "").strip()
+    if not raw:
+        return "1"
+    try:
+        as_float = float(raw)
+        if as_float == int(as_float):
+            return str(int(as_float))
+    except (ValueError, TypeError, OverflowError):
+        pass
+    return raw
 
 
 def _safe_int(value: Any) -> int | None:

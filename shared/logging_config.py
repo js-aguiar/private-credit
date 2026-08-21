@@ -10,9 +10,27 @@ import json
 import logging
 import os
 import sys
+from contextvars import ContextVar
 from datetime import datetime, timezone
+from typing import Any
 
 _CONFIGURED = False
+
+_run_context: ContextVar[dict[str, Any] | None] = ContextVar("run_context", default=None)
+
+
+def bind_run_context(**fields: Any) -> None:
+    """Attach structured fields to every subsequent log line in this execution context."""
+    current = dict(_run_context.get() or {})
+    for key, value in fields.items():
+        if value is not None:
+            current[key] = value
+    _run_context.set(current)
+
+
+def get_run_context() -> dict[str, Any]:
+    ctx = _run_context.get()
+    return dict(ctx) if ctx else {}
 
 
 class JsonFormatter(logging.Formatter):
@@ -32,6 +50,7 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
+        payload.update(get_run_context())
         # Attach any structured extras passed via logger.info(..., extra={...}).
         for key, value in record.__dict__.items():
             if key not in self.RESERVED and not key.startswith("_"):

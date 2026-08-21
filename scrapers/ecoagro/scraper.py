@@ -27,9 +27,8 @@ class EcoagroScraper(BaseScraper):
 
     BASE_URL = "https://ecoagro.agr.br"
     LIST_URL = "https://ecoagro.agr.br/emissoes"
-    # The detail URL pattern is configurable because the site may change it; the
-    # {id} placeholder is filled with the row's data-id.
-    DEFAULT_DETAIL_TEMPLATE = "https://ecoagro.agr.br/emissoes/{id}"
+    # Listing rows navigate (via JS) to /emissoes-integra/{data-id}.
+    DEFAULT_DETAIL_TEMPLATE = "https://ecoagro.agr.br/emissoes-integra/{id}"
 
     def __init__(self, config, context=None):
         super().__init__(config, context=context)
