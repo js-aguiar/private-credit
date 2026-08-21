@@ -75,10 +75,11 @@ class RizaScraper(BaseScraper):
             if isinstance(s, dict) and s.get("instrumentCode")
         ]
         series_numbers = [
-            str(s.get("number")).strip()
+            _normalize_serie_numero(s.get("number"))
             for s in series
             if isinstance(s, dict) and s.get("number") is not None
         ]
+        series_numbers = [n for n in series_numbers if n]
 
         return EmissaoData(
             fonte=self.source_name,
@@ -160,8 +161,8 @@ class RizaScraper(BaseScraper):
         for item in series_payload:
             if not isinstance(item, dict):
                 continue
-            numero = item.get("number")
-            if numero is None:
+            numero = _normalize_serie_numero(item.get("number"))
+            if not numero:
                 continue
             indexer = item.get("indexer")
             if isinstance(indexer, dict):
@@ -171,7 +172,7 @@ class RizaScraper(BaseScraper):
                 indexador = params.get("indexer") if isinstance(params, dict) else None
             series.append(
                 SerieData(
-                    numero_serie=str(numero),
+                    numero_serie=numero,
                     isin=(item.get("isinCode") or "").strip() or None,
                     numero_emissao=emissao.numero_emissao,
                     codigo_cetip=(item.get("instrumentCode") or "").strip() or None,
@@ -209,6 +210,8 @@ class RizaScraper(BaseScraper):
             url = item.get("download")
             if not url:
                 continue
+            doc_id = item.get("id")
+            id_origem_arquivo = str(doc_id).strip() if doc_id is not None else None
             doc_type = item.get("type")
             description = item.get("description")
             titulo = doc_type
@@ -217,6 +220,7 @@ class RizaScraper(BaseScraper):
             docs.append(
                 DocumentoData(
                     link_documento=url,
+                    id_origem_arquivo=id_origem_arquivo or None,
                     titulo=titulo,
                     tipo_documento=doc_type,
                     data_documento=parse_br_date(str(item.get("emissionDate") or "")[:10]),
@@ -246,3 +250,17 @@ class RizaScraper(BaseScraper):
         if names:
             return "; ".join(dict.fromkeys(names))
         return None
+
+
+def _normalize_serie_numero(value: Any) -> str:
+    """Normalize API série numbers like ``1.0`` → ``1``."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        as_float = float(raw)
+        if as_float == int(as_float):
+            return str(int(as_float))
+    except (ValueError, TypeError, OverflowError):
+        pass
+    return raw
