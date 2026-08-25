@@ -16,12 +16,11 @@ const els = {
   form: document.getElementById("filters"),
   company: document.getElementById("filter-company"),
   companies: document.getElementById("company-options"),
-  from: document.getElementById("filter-from"),
-  to: document.getElementById("filter-to"),
+  cetip: document.getElementById("filter-cetip"),
+  isin: document.getElementById("filter-isin"),
   fonte: document.getElementById("filter-fonte"),
-  type: document.getElementById("filter-type"),
   reset: document.getElementById("reset-filters"),
-  list: document.getElementById("document-list"),
+  list: document.getElementById("emissao-list"),
   status: document.getElementById("status"),
   more: document.getElementById("load-more"),
   count: document.getElementById("result-count"),
@@ -36,11 +35,10 @@ let loading = false;
 
 function queryFromForm() {
   const params = new URLSearchParams();
-  if (els.company.value.trim()) params.set("devedor", els.company.value.trim());
-  if (els.from.value) params.set("date_from", els.from.value);
-  if (els.to.value) params.set("date_to", els.to.value);
+  if (els.company.value.trim()) params.set("company", els.company.value.trim());
+  if (els.cetip.value.trim()) params.set("cetip", els.cetip.value.trim());
+  if (els.isin.value.trim()) params.set("isin", els.isin.value.trim());
   if (els.fonte.value) params.set("fonte", els.fonte.value);
-  if (els.type.value) params.set("tipo_documento", els.type.value);
   params.set("limit", String(PAGE_SIZE));
   params.set("offset", String(offset));
   return params;
@@ -67,7 +65,7 @@ function dash(value) {
 
 function formatDate(value) {
   if (!value) return "—";
-  const [year, month, day] = value.split("-");
+  const [year, month, day] = String(value).split("-");
   if (!day) return value;
   return `${day}/${month}/${year}`;
 }
@@ -76,18 +74,30 @@ function fonteLabel(fonte) {
   return FONTE_LABELS[fonte] || fonte || "—";
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
 function setStatus(message, show = true) {
   els.status.hidden = !show;
   els.status.textContent = message || "";
 }
 
+function codesSummary(item) {
+  const parts = [];
+  if (item.isin) parts.push(item.isin);
+  if (item.codigos_cetip) parts.push(item.codigos_cetip);
+  return parts.join(" · ") || "—";
+}
+
 async function loadFilters() {
-  const data = await api("/api/filters");
+  const data = await api("/api/emissoes/filters");
   for (const fonte of data.fontes || []) {
     els.fonte.append(option(fonte, fonteLabel(fonte)));
-  }
-  for (const tipo of data.tipos || []) {
-    els.type.append(option(tipo, tipo));
   }
   for (const company of data.companies || []) {
     els.companies.append(option(company, company));
@@ -99,40 +109,33 @@ function renderRows(items, append) {
   for (const item of items) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "row";
+    button.className = "row row-emissoes";
     button.innerHTML = `
       <span>${escapeHtml(dash(item.company))}</span>
-      <span class="muted">${escapeHtml(formatDate(item.date))}</span>
-      <span>${escapeHtml(dash(item.document_type))}</span>
+      <span class="muted">${escapeHtml(fonteLabel(item.fonte))}</span>
+      <span class="muted">${escapeHtml(dash(item.numero_emissao))}</span>
+      <span class="muted codes">${escapeHtml(codesSummary(item))}</span>
     `;
     button.addEventListener("click", () => openDetail(item.id));
     els.list.append(button);
   }
 }
 
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-async function loadDocuments(append = false) {
+async function loadEmissoes(append = false) {
   if (loading) return;
   loading = true;
   if (!append) setStatus("Loading…");
   try {
-    const data = await api(`/api/documents?${queryFromForm().toString()}`);
+    const data = await api(`/api/emissoes?${queryFromForm().toString()}`);
     total = data.total || 0;
     renderRows(data.items || [], append);
     offset = (data.offset || 0) + (data.items || []).length;
     els.more.hidden = !data.has_more;
-    els.count.textContent = total === 1 ? "1 document" : `${total} documents`;
-    if (total === 0) setStatus("No documents match these filters.");
+    els.count.textContent = total === 1 ? "1 emission" : `${total} emissions`;
+    if (total === 0) setStatus("No emissions match these filters.");
     else setStatus("", false);
   } catch (error) {
-    setStatus(error.message || "Could not load documents.");
+    setStatus(error.message || "Could not load emissions.");
   } finally {
     loading = false;
   }
@@ -140,38 +143,93 @@ async function loadDocuments(append = false) {
 
 function kv(label, value, isLink = false) {
   const display = dash(value);
-  const inner = isLink && value
-    ? `<a href="${escapeHtml(value)}" target="_blank" rel="noopener noreferrer">${escapeHtml(value)}</a>`
-    : escapeHtml(display);
+  const inner =
+    isLink && value
+      ? `<a href="${escapeHtml(value)}" target="_blank" rel="noopener noreferrer">${escapeHtml(value)}</a>`
+      : escapeHtml(display);
   return `<div class="kv"><dt>${escapeHtml(label)}</dt><dd>${inner}</dd></div>`;
+}
+
+function renderSeries(series) {
+  if (!series || !series.length) {
+    return `<p class="section-empty">No series for this emission.</p>`;
+  }
+  const rows = series
+    .map(
+      (serie) => `
+      <tr>
+        <td>${escapeHtml(dash(serie.numero_serie))}</td>
+        <td>${escapeHtml(dash(serie.codigo_cetip))}</td>
+        <td>${escapeHtml(dash(serie.isin))}</td>
+        <td>${escapeHtml(formatDate(serie.data_vencimento))}</td>
+        <td>${escapeHtml(dash(serie.remuneracao))}</td>
+        <td>${escapeHtml(dash(serie.indexador))}</td>
+      </tr>`
+    )
+    .join("");
+  return `
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Série</th>
+            <th>CETIP</th>
+            <th>ISIN</th>
+            <th>Maturity</th>
+            <th>Interest</th>
+            <th>Indexer</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function renderDocuments(documentos) {
+  if (!documentos || !documentos.length) {
+    return `<p class="section-empty">No documents for this emission.</p>`;
+  }
+  const items = documentos
+    .map((doc) => {
+      const title = doc.titulo || doc.tipo_documento || "Document";
+      const meta = [doc.tipo_documento, formatDate(doc.data_documento)]
+        .filter((part) => part && part !== "—")
+        .join(" · ");
+      const link = doc.url
+        ? `<a href="${escapeHtml(doc.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>`
+        : escapeHtml(title);
+      return `<li class="doc-item"><div class="doc-title">${link}</div><div class="muted">${escapeHtml(meta || "—")}</div></li>`;
+    })
+    .join("");
+  return `<ul class="doc-list">${items}</ul>`;
 }
 
 async function openDetail(id) {
   els.sheet.hidden = false;
-  els.sheetTitle.textContent = "Document";
+  els.sheetTitle.textContent = "Emission";
   els.sheetBody.innerHTML = `<p class="status">Loading…</p>`;
   try {
-    const doc = await api(`/api/documents/${id}`);
-    els.sheetTitle.textContent = doc.title || doc.document_type || "Document";
-    const extras = doc.extras && Object.keys(doc.extras).length
-      ? kv("Extras", JSON.stringify(doc.extras, null, 2))
-      : "";
+    const data = await api(`/api/emissoes/${id}`);
+    els.sheetTitle.textContent = data.company || data.operacao || "Emission";
     els.sheetBody.innerHTML = [
-      kv("Company", doc.company),
-      kv("Date", formatDate(doc.date)),
-      kv("Document type", doc.document_type),
-      kv("Securitization company", fonteLabel(doc.fonte)),
-      kv("Title", doc.title),
-      kv("ISIN", doc.isin),
-      kv("Emission number", doc.numero_emissao),
-      kv("CETIP", doc.codigo_cetip),
-      kv("Operation", doc.operacao),
-      kv("Emission page", doc.emission_url, true),
-      kv("Inserted", doc.inserted_at),
-      extras,
-      doc.url
-        ? `<a class="open-link" href="${escapeHtml(doc.url)}" target="_blank" rel="noopener noreferrer">Open document</a>`
-        : "",
+      `<section class="detail-section"><h3>Emission</h3>`,
+      kv("Company", data.company),
+      kv("Operation", data.operacao),
+      kv("Debtor", data.devedor),
+      kv("Securitization company", fonteLabel(data.fonte)),
+      kv("Emission number", data.numero_emissao),
+      kv("ISIN", data.isin),
+      kv("CETIP", data.codigos_cetip),
+      kv("Issue date", formatDate(data.data_emissao)),
+      kv("Maturity", formatDate(data.data_vencimento)),
+      kv("Emission page", data.link, true),
+      `</section>`,
+      `<section class="detail-section"><h3>Series (${(data.series || []).length})</h3>`,
+      renderSeries(data.series),
+      `</section>`,
+      `<section class="detail-section"><h3>Documents (${(data.documentos || []).length})</h3>`,
+      renderDocuments(data.documentos),
+      `</section>`,
     ].join("");
   } catch (error) {
     els.sheetBody.innerHTML = `<p class="status">${escapeHtml(error.message)}</p>`;
@@ -185,16 +243,16 @@ function closeSheet() {
 els.form.addEventListener("submit", (event) => {
   event.preventDefault();
   offset = 0;
-  loadDocuments(false);
+  loadEmissoes(false);
 });
 
 els.reset.addEventListener("click", () => {
   els.form.reset();
   offset = 0;
-  loadDocuments(false);
+  loadEmissoes(false);
 });
 
-els.more.addEventListener("click", () => loadDocuments(true));
+els.more.addEventListener("click", () => loadEmissoes(true));
 
 els.sheet.addEventListener("click", (event) => {
   if (event.target.dataset.close) closeSheet();
@@ -206,4 +264,4 @@ document.addEventListener("keydown", (event) => {
 
 loadFilters()
   .catch(() => setStatus("Could not load filters."))
-  .finally(() => loadDocuments(false));
+  .finally(() => loadEmissoes(false));
