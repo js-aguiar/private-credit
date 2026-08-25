@@ -122,6 +122,24 @@ class WebStack(Stack):
             protocol_policy=cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
         )
 
+        # Clean /documentos path → static file (default_root_object only covers /).
+        documentos_rewrite = cloudfront.Function(
+            self,
+            "DocumentosPathRewrite",
+            code=cloudfront.FunctionCode.from_inline(
+                """
+function handler(event) {
+  var request = event.request;
+  var uri = request.uri;
+  if (uri === '/documentos' || uri === '/documentos/') {
+    request.uri = '/documentos.html';
+  }
+  return request;
+}
+"""
+            ),
+        )
+
         distribution = cloudfront.Distribution(
             self,
             "CatalogCdn",
@@ -130,6 +148,12 @@ class WebStack(Stack):
                 origin=s3_origin,
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                 cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
+                function_associations=[
+                    cloudfront.FunctionAssociation(
+                        function=documentos_rewrite,
+                        event_type=cloudfront.FunctionEventType.VIEWER_REQUEST,
+                    )
+                ],
             ),
             additional_behaviors={
                 "/api/*": cloudfront.BehaviorOptions(
