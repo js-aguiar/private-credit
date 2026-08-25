@@ -22,6 +22,13 @@ from shared.records import DocumentoData, EmissaoData
 FONTE = "ecoagro"
 _PAGE_RE = re.compile(r"[?&]page=(\d+)")
 _SERIE_SPLIT_RE = re.compile(r"[-,/;\s]+")
+_SERIE_JS_BLOCK_RE = re.compile(
+    r"serie\.cd_serie\s*=\s*\"(?P<numero>[^\"]*)\";\s*"
+    r"serie\.isin\s*=\s*\"(?P<isin>[^\"]*)\";?\s*"
+    r"serie\.cetip\s*=\s*\"(?P<cetip>[^\"]*)\";?\s*"
+    r"serie\.remuneracao\s*=\s*\"(?P<remuneracao>[^\"]*)\"",
+    re.DOTALL,
+)
 
 
 def _cell_text(cells: list, index: int) -> str | None:
@@ -95,6 +102,84 @@ def parse_detail(html: str, base_url: str) -> tuple[dict, list[DocumentoData]]:
     if extras:
         updates["extras"] = extras
     return updates, documentos
+
+
+def parse_series_from_detail(html: str) -> list:
+    """Extract per-série ISIN/CETIP/remuneration from inline JavaScript on the detail page."""
+    from shared.records import SerieData
+
+    series: list[SerieData] = []
+    seen: set[tuple[str, str | None]] = set()
+    for match in _SERIE_JS_BLOCK_RE.finditer(html):
+        numero = clean_text(match.group("numero"))
+        if not numero:
+            continue
+        isin = clean_text(match.group("isin")) or None
+        cetip = clean_text(match.group("cetip")) or None
+        remuneracao = clean_text(match.group("remuneracao")) or None
+        key = (numero, cetip)
+        if key in seen:
+            continue
+        seen.add(key)
+        series.append(
+            SerieData(
+                numero_serie=numero,
+                isin=isin,
+                codigo_cetip=cetip,
+                remuneracao=remuneracao,
+            )
+        )
+    return series
+
+
+def merge_series_from_detail(baseline: list, detail: list) -> list:
+    """Overlay detail-page fields onto list-derived séries."""
+    from shared.records import SerieData
+
+    if not detail:
+        return baseline
+
+    by_numero = {serie.numero_serie: serie for serie in detail}
+    by_cetip = {serie.codigo_cetip: serie for serie in detail if serie.codigo_cetip}
+
+    merged: list[SerieData] = []
+    for base in baseline:
+        extra = by_numero.get(base.numero_serie)
+        if extra is None and base.codigo_cetip:
+            extra = by_cetip.get(base.codigo_cetip)
+        merged.append(
+            SerieData(
+                numero_serie=base.numero_serie,
+                numero_emissao=base.numero_emissao,
+                codigo_cetip=(extra.codigo_cetip if extra else None) or base.codigo_cetip,
+                isin=(extra.isin if extra else None) or base.isin,
+                remuneracao=(extra.remuneracao if extra else None) or base.remuneracao,
+                indexador=(extra.indexador if extra else None) or base.indexador,
+                valor=base.valor,
+                data_emissao=base.data_emissao,
+                data_vencimento=base.data_vencimento,
+                quantidade=base.quantidade,
+                rating=base.rating,
+                extras=base.extras,
+            )
+        )
+
+    seen = {(serie.numero_serie, serie.codigo_cetip) for serie in merged}
+    for extra in detail:
+        key = (extra.numero_serie, extra.codigo_cetip)
+        if key not in seen:
+            merged.append(extra)
+            seen.add(key)
+    return merged
+
+
+def emission_isin_from_series(series: list) -> str | None:
+    """Return a single emission-level ISIN when exactly one série has one."""
+    isins: list[str] = []
+    for serie in series:
+        if serie.isin and serie.isin not in isins:
+            isins.append(serie.isin)
+    return isins[0] if len(isins) == 1 else None
 
 
 def _guess_doc_type(titulo: str | None, url: str) -> str | None:
