@@ -16,9 +16,12 @@ from shared.scraper_base import BaseScraper
 
 from .parsers import (
     build_series_from_emissao,
+    emission_isin_from_series,
     find_max_page,
+    merge_series_from_detail,
     parse_detail,
     parse_listing_rows,
+    parse_series_from_detail,
 )
 
 
@@ -29,7 +32,7 @@ class EcoagroScraper(BaseScraper):
     LIST_URL = "https://ecoagro.agr.br/emissoes"
     # The detail URL pattern is configurable because the site may change it; the
     # {id} placeholder is filled with the row's data-id.
-    DEFAULT_DETAIL_TEMPLATE = "https://ecoagro.agr.br/emissoes/{id}"
+    DEFAULT_DETAIL_TEMPLATE = "https://ecoagro.agr.br/emissoes-integra/{id}"
 
     def __init__(self, config, context=None):
         super().__init__(config, context=context)
@@ -60,12 +63,17 @@ class EcoagroScraper(BaseScraper):
         documentos = []
         if html:
             page_updates, documentos = parse_detail(html, self.BASE_URL)
+            detail_series = parse_series_from_detail(html)
+            series = merge_series_from_detail(series, detail_series)
             extras = page_updates.pop("extras", None)
             updates.update(page_updates)
             merged_extras = {"detalhe_acessivel": True}
             if extras:
                 merged_extras.update(extras)
             updates["extras"] = merged_extras
+            isin = emission_isin_from_series(series)
+            if isin:
+                updates["isin"] = isin
         else:
             updates["extras"] = {"detalhe_acessivel": False}
 
