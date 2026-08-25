@@ -174,12 +174,12 @@ def merge_series_from_detail(baseline: list, detail: list) -> list:
 
 
 def emission_isin_from_series(series: list) -> str | None:
-    """Join unique non-empty série ISINs for the emission-level column."""
+    """Return a single emission-level ISIN when exactly one série has one."""
     isins: list[str] = []
     for serie in series:
         if serie.isin and serie.isin not in isins:
             isins.append(serie.isin)
-    return " ".join(isins) if isins else None
+    return isins[0] if len(isins) == 1 else None
 
 
 def _guess_doc_type(titulo: str | None, url: str) -> str | None:

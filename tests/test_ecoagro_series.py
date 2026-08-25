@@ -32,7 +32,7 @@ def test_merge_series_from_detail_enriches_list_baseline():
     baseline = build_series_from_emissao("175", "1-2", "CRA02200795 CRA02200796")
     detail = parse_series_from_detail(httpx.get(DETAIL_URL, timeout=30).text)
     merged = merge_series_from_detail(baseline, detail)
-    assert emission_isin_from_series(merged) == "BRECOACRAA72 BRECOACRAAU8"
+    assert emission_isin_from_series(merged) is None
     by_numero = {s.numero_serie: s for s in merged}
     assert by_numero["1"].isin == "BRECOACRAA72"
     assert by_numero["2"].isin == "BRECOACRAAU8"
