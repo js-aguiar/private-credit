@@ -54,3 +54,11 @@ fails against a plain local Postgres.
   per-scraper `/{prefix}/{source}/` defaults (8s, 6 req/min).
 - Max runtime: 24h (`backfill_max_hours` CDK context); instance self-terminates and deletes EBS.
 - Incomplete backfill is OK — twice-daily Lambdas drain remaining `detalhes_coletados=false` rows.
+
+### Public catalog (S3 + CloudFront + VPC Lambda)
+- Stack: `br-sec-scrapers-web`. Deploy with `cd infra && cdk deploy br-sec-scrapers-web`.
+- CatalogUrl output is the CDN base. **`/` is Emissões** (list/detail + company/CETIP/ISIN filters);
+  **`/documentos` is the documents catalog** (CloudFront Function rewrites to `documentos.html` —
+  without that rewrite, SPA 403/404 fallback would serve the emissoes `index.html`).
+- API: `/api/emissoes`, `/api/emissoes/{id}`, `/api/emissoes/filters`, plus existing `/api/documents*`.
+- Local: serve `web/` static files and run `python web/api/local.py` (see `web/api/local.py`).
