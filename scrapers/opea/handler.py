@@ -50,10 +50,10 @@ def handler(event, context):
         return {"statusCode": 200, "summary": payload}
 
     if isinstance(event, dict) and event.get("action") == "refetch_detail":
-        from sqlalchemy import select
+        from sqlalchemy import delete, select
 
         from shared.db import session_scope
-        from shared.models import Emissao
+        from shared.models import Documento, Emissao
 
         ids = event.get("id_origem") or event.get("id_origens") or []
         if isinstance(ids, str):
@@ -61,12 +61,15 @@ def handler(event, context):
         ids = [str(value).strip() for value in ids if str(value).strip()]
         if not ids:
             return {"statusCode": 400, "error": "id_origem_required"}
+        reset_documentos = bool(event.get("reset_documentos"))
 
         scraper = OpeaScraper.from_env(context=context)
         summary = {
             "source": scraper.source_name,
             "action": "refetch_detail",
             "id_origens": ids,
+            "reset_documentos": reset_documentos,
+            "documentos_removidos": 0,
             "detalhes_processados": 0,
             "series_gravadas": 0,
             "documentos_gravados": 0,
@@ -85,6 +88,13 @@ def handler(event, context):
                     if emissao is None:
                         summary["not_found"].append(id_origem)
                         continue
+                    if reset_documentos:
+                        result = session.execute(
+                            delete(Documento).where(
+                                Documento.emissao_id == emissao.emissao_id
+                            )
+                        )
+                        summary["documentos_removidos"] += int(result.rowcount or 0)
                     scraper._process_single_detail(session, emissao, summary)
         finally:
             scraper.close()
