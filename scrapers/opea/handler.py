@@ -49,6 +49,40 @@ def handler(event, context):
         logger.info("table_counts_done", extra=payload)
         return {"statusCode": 200, "summary": payload}
 
+    if isinstance(event, dict) and event.get("action") == "repair_documentos":
+        from .repair_docs import run_repair_opea_documentos
+
+        logger.info("repair_opea_documentos_start")
+        summary = run_repair_opea_documentos(context=context)
+        payload = {
+            "action": summary.action,
+            "emissoes": summary.emissoes,
+            "cedoc_children": summary.cedoc_children,
+            "id_cedoc": summary.id_cedoc,
+            "documentos_removidos": summary.documentos_removidos,
+            "documentos_gravados": summary.documentos_gravados,
+            "emissoes_com_documentos": summary.emissoes_com_documentos,
+            "emissoes_sem_documentos": summary.emissoes_sem_documentos,
+            "sem_documentos": summary.sem_documentos,
+            "erros": summary.erros,
+        }
+        logger.info(
+            "repair_opea_documentos_done",
+            extra={k: v for k, v in payload.items() if k != "sem_documentos"},
+        )
+        return {"statusCode": 200, "summary": payload}
+
+    if isinstance(event, dict) and event.get("action") == "emissoes_sem_documentos":
+        from .repair_docs import list_opea_emissoes_sem_documentos
+
+        logger.info("emissoes_sem_documentos_start")
+        payload = list_opea_emissoes_sem_documentos()
+        logger.info(
+            "emissoes_sem_documentos_done",
+            extra={"total": payload.get("total")},
+        )
+        return {"statusCode": 200, "summary": payload}
+
     if isinstance(event, dict) and event.get("action") == "refetch_detail":
         from sqlalchemy import delete, select
 
