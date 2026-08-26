@@ -280,6 +280,11 @@ def upsert_documento(session: Session, emissao_id: int, fonte: str, data: Docume
     do **not** reassign by ``numero_emissao`` alone — that number collides across
     unrelated deals (e.g. CRA.228 vs CRI.228).
 
+    On ``(fonte, id_origem_arquivo)`` conflict, metadata is refreshed but
+    ``emissao_id`` is **not** overwritten — the first successful attachment wins.
+    Otherwise later scrapes of colliding parents (same natureza + E0NNN, different
+    vehicle) would steal documents from the earlier emission.
+
     Other sources keep deduping by ``(emissao_id, link_documento)``.
 
     ``data_insercao`` is deliberately never updated so it always reflects when the
@@ -287,8 +292,7 @@ def upsert_documento(session: Session, emissao_id: int, fonte: str, data: Docume
     """
     values, id_origem_arquivo = _prepare_documento_values(session, emissao_id, fonte, data)
     stmt = insert(_DOCUMENTO).values(**values)
-    update_set = {
-        "emissao_id": stmt.excluded.emissao_id,
+    metadata_update = {
         "isin": stmt.excluded.isin,
         "numero_emissao": stmt.excluded.numero_emissao,
         "codigo_cetip": stmt.excluded.codigo_cetip,
@@ -301,14 +305,16 @@ def upsert_documento(session: Session, emissao_id: int, fonte: str, data: Docume
     }
 
     if id_origem_arquivo:
+        # Keep the original emissao_id — do not let later scrapes reassign the row.
         stmt = stmt.on_conflict_do_update(
             index_elements=["fonte", "id_origem_arquivo"],
             index_where=text("id_origem_arquivo IS NOT NULL"),
-            set_=update_set,
+            set_=metadata_update,
         )
     else:
         stmt = stmt.on_conflict_do_update(
-            constraint="uq_documentos_emissao_link", set_=update_set
+            constraint="uq_documentos_emissao_link",
+            set_={**metadata_update, "emissao_id": stmt.excluded.emissao_id},
         )
     session.execute(stmt)
 

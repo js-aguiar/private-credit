@@ -12,8 +12,9 @@ API base: https://app.opea.com.br/bff/v1/api/
           → {"content": {..., "idCedoc": "<guid>", ...}}
   Files:  GET cedoc/files?idCedoc={idCedoc}
           → {"children": [{name, url, categoryName, createdOn, ...}]}
-          Institution-wide list; filter by natureza + emission code in the filename
-          (e.g. CRA + E0228 for parent ``CRA.228.CIA``).
+          Institution-wide list; filter by natureza + emission code + vehicle book
+          in the filename (e.g. CRA + E0228 + CIA → ``OP_CRA_E0228_…``;
+          CRI + E0228 + TRU → ``TRU_CRI_E0228_…``).
 """
 
 from __future__ import annotations
@@ -45,6 +46,15 @@ def natureza_from_parent(parent: str) -> str | None:
     return part or None
 
 
+def vehicle_from_parent(parent: str) -> str | None:
+    """Third segment of the parent code (``CIA``, ``TRU``, ``PLS``, …)."""
+    parts = (parent or "").split(".")
+    if len(parts) >= 3:
+        part = parts[2].strip().upper()
+        return part or None
+    return None
+
+
 def emission_file_code(numero_emissao: str | int | None) -> str | None:
     """Zero-padded emission code used in cedoc filenames, e.g. 228 → ``E0228``."""
     if numero_emissao is None:
@@ -55,25 +65,63 @@ def emission_file_code(numero_emissao: str | int | None) -> str | None:
         return None
 
 
-def document_matches_emission(filename: str, natureza: str | None, emission_code: str | None) -> bool:
-    """Keep files that mention both the asset nature and the emission code."""
+def _filename_has_natureza(name: str, nature: str) -> bool:
+    """True when the uppercased filename mentions natureza in a structured way."""
+    if f"OP_{nature}_" in name:
+        return True
+    if f"_{nature}_" in name:
+        return True
+    if name.startswith(f"{nature}_") or name.startswith(f"{nature} "):
+        return True
+    return False
+
+
+def _leading_book_token(filename: str, nature: str) -> str | None:
+    """Leading book/vehicle token when present and not OP / natureza.
+
+    Examples: ``TRU_CRI_E0228_…`` → ``TRU``; ``GS_CRA_E0032_…`` → ``GS``;
+    ``OP_CRI_E0228_…`` → ``None``; ``CRI_E0228_…`` → ``None``.
+    """
+    name = (filename or "").upper()
+    if "_" not in name:
+        return None
+    token = name.split("_", 1)[0].strip()
+    if not token or token == "OP" or token == nature:
+        return None
+    return token
+
+
+def document_matches_emission(
+    filename: str,
+    natureza: str | None,
+    emission_code: str | None,
+    vehicle: str | None = None,
+) -> bool:
+    """Keep files for this parent emission's natureza, E0NNN code, and vehicle book.
+
+    Cedoc is institution-wide: many parents share the same ``natureza`` + emission
+    number (e.g. ``CRI.228.CIA`` vs ``CRI.228.TRU``). Filenames use either the
+    default Opea book prefix ``OP_{NATURE}_`` (CIA) or a vehicle prefix
+    (``TRU_``, ``GS_``, ``GCII_``, ``SPE01_``, …).
+    """
     if not emission_code:
         return False
     name = (filename or "").upper()
-    if emission_code.upper() not in name:
+    ecode = emission_code.upper()
+    if ecode not in name:
         return False
     if not natureza:
         return True
     nature = natureza.upper()
-    # Prefer explicit OP_{NATURE}_E0NNN markers; also accept _{NATURE}_ near the code.
-    if f"OP_{nature}_" in name:
-        return True
-    if f"_{nature}_" in name and emission_code.upper() in name:
-        return True
-    # Some older names start with the nature token.
-    if name.startswith(f"{nature}_") or name.startswith(f"{nature} "):
-        return True
-    return False
+    if not _filename_has_natureza(name, nature):
+        return False
+
+    veh = (vehicle or "").strip().upper() or None
+    book = _leading_book_token(name, nature)
+    if book:
+        return bool(veh) and book == veh
+    # Default Opea book (OP_… / nature-first): only attach to CIA parents.
+    return veh == "CIA"
 
 
 def normalize_serie_number(value: Any) -> str:
@@ -392,7 +440,7 @@ class OpeaScraper(BaseScraper):
         return updates
 
     def _fetch_documents(self, emissao, detail: dict) -> list[DocumentoData]:
-        """Fetch documents once per emission; filter by natureza + E0NNN."""
+        """Fetch documents once per emission; filter by natureza + E0NNN + vehicle."""
         id_cedoc = detail.get("idCedoc")
         if not id_cedoc:
             return []
@@ -401,6 +449,7 @@ class OpeaScraper(BaseScraper):
         if isinstance(emissao.extras, dict):
             natureza = emissao.extras.get("natureza")
         natureza = natureza or natureza_from_parent(emissao.id_origem)
+        vehicle = vehicle_from_parent(emissao.id_origem)
         if not emission_code:
             return []
 
@@ -418,7 +467,7 @@ class OpeaScraper(BaseScraper):
         seen_ids: set[str] = set()
         for child in children:
             name = child.get("name") or ""
-            if not document_matches_emission(name, natureza, emission_code):
+            if not document_matches_emission(name, natureza, emission_code, vehicle):
                 continue
             url = child.get("url")
             if not url:

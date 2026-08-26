@@ -20,6 +20,7 @@ from scrapers.opea.scraper import (
     parent_codigo_opea,
     parse_remuneracao,
     serie_from_detail,
+    vehicle_from_parent,
 )
 
 
@@ -27,6 +28,9 @@ def test_parent_codigo_opea():
     assert parent_codigo_opea("CRI.624.CIA.1") == "CRI.624.CIA"
     assert parent_codigo_opea("CRA.228.CIA.1") == "CRA.228.CIA"
     assert natureza_from_parent("CRA.228.CIA") == "CRA"
+    assert vehicle_from_parent("CRI.228.CIA") == "CIA"
+    assert vehicle_from_parent("CRI.228.TRU") == "TRU"
+    assert vehicle_from_parent("DEB.2.GCII") == "GCII"
 
 
 def test_normalize_serie_number_and_remuneracao():
@@ -37,10 +41,36 @@ def test_normalize_serie_number_and_remuneracao():
 
 
 def test_document_filter_separates_cra_and_cri():
-    assert document_matches_emission("OP_CRA_E0228_S001_TS.pdf", "CRA", "E0228")
-    assert not document_matches_emission("OP_CRI_E0228_S001_TS.pdf", "CRA", "E0228")
-    assert document_matches_emission("OP_CRI_E0228_S001_TS.pdf", "CRI", "E0228")
+    assert document_matches_emission("OP_CRA_E0228_S001_TS.pdf", "CRA", "E0228", "CIA")
+    assert not document_matches_emission("OP_CRI_E0228_S001_TS.pdf", "CRA", "E0228", "CIA")
+    assert document_matches_emission("OP_CRI_E0228_S001_TS.pdf", "CRI", "E0228", "CIA")
     assert emission_file_code(228) == "E0228"
+
+
+def test_document_filter_separates_cia_and_tru_books():
+    """Patriani III (CIA) vs Dutra (TRU) share CRI + E0228 — vehicle decides."""
+    op = "OP_CRI_E0228_S001_S002_S003_S004_S005_S006_S007_S008_TS_20231121.pdf"
+    tru = "TRU_CRI_E0228_S001_TS.pdf"
+    assert document_matches_emission(op, "CRI", "E0228", "CIA")
+    assert not document_matches_emission(op, "CRI", "E0228", "TRU")
+    assert document_matches_emission(tru, "CRI", "E0228", "TRU")
+    assert not document_matches_emission(tru, "CRI", "E0228", "CIA")
+
+
+def test_document_filter_rejects_foreign_prefixes_and_pls_op():
+    gs = "GS_CRA_E0032_S001_DFPS_20251231.pdf"
+    gcii = "GCII_DEB_E0002_S001_ANE_20180302.pdf"
+    op_cra = "OP_CRA_E0032_S001_DFPS_20250930.pdf"
+    assert not document_matches_emission(gs, "CRA", "E0032", "CIA")
+    assert not document_matches_emission(gs, "CRA", "E0032", "TRU")
+    assert not document_matches_emission(gs, "CRA", "E0032", "PLS")
+    assert document_matches_emission(gcii, "DEB", "E0002", "GCII")
+    assert not document_matches_emission(gcii, "DEB", "E0002", "CIA")
+    # PLS never owns the default OP_ book when colliding with CIA.
+    assert not document_matches_emission(op_cra, "CRA", "E0032", "PLS")
+    assert document_matches_emission(op_cra, "CRA", "E0032", "CIA")
+    assert document_matches_emission("TRU_CRA_E0032_S001_TS.pdf", "CRA", "E0032", "TRU")
+    assert not document_matches_emission("TRU_CRA_E0032_S001_TS.pdf", "CRA", "E0032", "CIA")
 
 
 def test_group_list_items_collapses_series():
@@ -135,7 +165,7 @@ def test_live_log_prime_docs_identical_across_series():
         matched = {
             child["id"]
             for child in files
-            if document_matches_emission(child.get("name") or "", "CRI", "E0624")
+            if document_matches_emission(child.get("name") or "", "CRI", "E0624", "CIA")
         }
         doc_id_sets.append(matched)
         serie = serie_from_detail(code, detail, "624")
