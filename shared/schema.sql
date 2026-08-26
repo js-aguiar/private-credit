@@ -86,3 +86,12 @@ CREATE INDEX IF NOT EXISTS ix_emissoes_devedor      ON emissoes (devedor);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_documentos_fonte_id_origem_arquivo
     ON documentos (fonte, id_origem_arquivo)
     WHERE id_origem_arquivo IS NOT NULL;
+
+-- ISINs that appeared on more than one série (bad source data). Remembered so re-scrapes
+-- do not resurrect the value on only one side.
+CREATE TABLE IF NOT EXISTS isin_contestados (
+    isin         VARCHAR(20) PRIMARY KEY,
+    fonte        VARCHAR(64),
+    detectado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+

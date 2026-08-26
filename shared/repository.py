@@ -14,9 +14,12 @@ from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from .logging_config import get_logger
 from .models import Documento, Emissao, Serie
 from .opea_documents import normalize_opea_document_url, opea_file_id
 from .records import DocumentoData, EmissaoData, SerieData
+
+logger = get_logger(__name__)
 
 _EMISSAO = Emissao.__table__
 _SERIE = Serie.__table__
@@ -60,12 +63,94 @@ def _now() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
+def _normalize_isin(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
+def is_isin_contested(session: Session, isin: str | None) -> bool:
+    """Return True if this ISIN was previously marked as duplicated across séries."""
+    isin = _normalize_isin(isin)
+    if not isin:
+        return False
+    row = session.execute(
+        text("SELECT 1 FROM isin_contestados WHERE isin = :isin LIMIT 1"),
+        {"isin": isin},
+    ).first()
+    return row is not None
+
+
+def mark_isin_contested(session: Session, isin: str, fonte: str | None = None) -> None:
+    """Record a contested ISIN so future upserts keep it NULL."""
+    isin = _normalize_isin(isin)
+    if not isin:
+        return
+    session.execute(
+        text(
+            """
+            INSERT INTO isin_contestados (isin, fonte, detectado_em)
+            VALUES (:isin, :fonte, :detectado_em)
+            ON CONFLICT (isin) DO NOTHING
+            """
+        ),
+        {"isin": isin, "fonte": fonte, "detectado_em": _now()},
+    )
+
+
+def sanitize_isin(session: Session, isin: str | None) -> str | None:
+    """Blank → NULL; contested → NULL."""
+    isin = _normalize_isin(isin)
+    if isin and is_isin_contested(session, isin):
+        return None
+    return isin
+
+
+def _resolve_serie_isin(
+    session: Session, emissao_id: int, numero_serie: str, fonte: str, isin: str | None
+) -> str | None:
+    """Return ISIN to store, nulling both sides when the same ISIN is claimed twice."""
+    isin = _normalize_isin(isin)
+    if not isin:
+        return None
+    if is_isin_contested(session, isin):
+        return None
+
+    others = session.execute(
+        select(Serie.emissao_id, Serie.numero_serie).where(Serie.isin == isin)
+    ).all()
+    conflict = any(
+        row.emissao_id != emissao_id or (row.numero_serie or "") != numero_serie
+        for row in others
+    )
+    if not conflict:
+        return isin
+
+    mark_isin_contested(session, isin, fonte=fonte)
+    session.execute(
+        _SERIE.update()
+        .where(_SERIE.c.isin == isin)
+        .values(isin=None, atualizado_em=_now())
+    )
+    logger.info(
+        "serie_isin_contested",
+        extra={
+            "isin": isin,
+            "fonte": fonte,
+            "emissao_id": emissao_id,
+            "numero_serie": numero_serie,
+        },
+    )
+    return None
+
+
 def _emissao_values(data: EmissaoData) -> dict:
     return {
         "fonte": data.fonte,
         "id_origem": data.id_origem,
         "link": data.link,
-        "isin": data.isin,
+        "isin": _normalize_isin(data.isin),
         "numero_emissao": data.numero_emissao,
         "codigos_cetip": data.codigos_cetip,
         "operacao": data.operacao,
@@ -85,6 +170,7 @@ def _emissao_values(data: EmissaoData) -> dict:
 def upsert_emissao(session: Session, data: EmissaoData) -> int:
     """Insert or update an emission by (fonte, id_origem); return its emissao_id."""
     values = _emissao_values(data)
+    values["isin"] = sanitize_isin(session, values.get("isin"))
     values["data_scraping"] = _now()
 
     stmt = insert(_EMISSAO).values(**values)
@@ -103,6 +189,8 @@ def apply_emissao_detail(session: Session, emissao_id: int, updates: dict) -> No
     """Apply detail-page fields and mark the emission as detailed/re-checked now."""
     extras = updates.get("extras")
     payload = {k: v for k, v in updates.items() if k != "extras"}
+    if "isin" in payload:
+        payload["isin"] = sanitize_isin(session, payload.get("isin"))
     payload["detalhes_coletados"] = True
     payload["ultima_verificacao_detalhe"] = _now()
     payload["atualizado_em"] = _now()
@@ -116,14 +204,18 @@ def apply_emissao_detail(session: Session, emissao_id: int, updates: dict) -> No
 
 
 def upsert_serie(session: Session, emissao_id: int, fonte: str, data: SerieData) -> None:
+    numero_serie = data.numero_serie or ""
+    isin = _resolve_serie_isin(session, emissao_id, numero_serie, fonte, data.isin)
+
     values = {
         "emissao_id": emissao_id,
         "fonte": fonte,
-        "numero_serie": data.numero_serie or "",
+        "numero_serie": numero_serie,
         "extras": data.extras or {},
     }
     for col in _SERIE_COLUMNS:
         values[col] = getattr(data, col)
+    values["isin"] = isin
 
     stmt = insert(_SERIE).values(**values)
     update_set = {col: stmt.excluded[col] for col in _SERIE_COLUMNS}
@@ -141,24 +233,21 @@ def _resolve_canonical_emissao_id(
     numero_emissao: str | None,
     fallback_emissao_id: int,
 ) -> int:
-    """Pick one emission row for shared multi-série documents (lowest emissao_id)."""
-    if not numero_emissao:
-        return fallback_emissao_id
-    canonical = session.scalar(
-        select(func.min(Emissao.emissao_id)).where(
-            Emissao.fonte == fonte,
-            Emissao.numero_emissao == numero_emissao,
-        )
-    )
-    return int(canonical) if canonical is not None else fallback_emissao_id
+    """Legacy helper kept for maintenance scripts.
+
+    Prefer attaching documents to the emission currently being scraped. Grouping by
+    ``numero_emissao`` alone is unsafe for Opea (numbers collide across natures).
+    """
+    return fallback_emissao_id
 
 
 def _prepare_documento_values(
+    session: Session,
     emissao_id: int,
     fonte: str,
     data: DocumentoData,
 ) -> tuple[dict, str | None]:
-    """Normalize Opea links/ids and attach shared docs to the canonical emission."""
+    """Normalize Opea links/ids for storage on the given emission."""
     link = data.link_documento
     id_origem_arquivo = data.id_origem_arquivo
 
@@ -169,7 +258,7 @@ def _prepare_documento_values(
     values = {
         "emissao_id": emissao_id,
         "fonte": fonte,
-        "isin": data.isin,
+        "isin": sanitize_isin(session, data.isin),
         "numero_emissao": data.numero_emissao,
         "codigo_cetip": data.codigo_cetip,
         "titulo": data.titulo,
@@ -187,24 +276,23 @@ def upsert_documento(session: Session, emissao_id: int, fonte: str, data: Docume
 
     Opea documents dedupe globally by ``(fonte, id_origem_arquivo)`` using the stable
     cedoc file UUID. Presigned S3 URLs are normalized to the object path before storage.
-    Shared multi-série files are stored once under the canonical emission (lowest
-    ``emissao_id`` for the same ``fonte`` + ``numero_emissao``).
+    Documents attach to the emission row currently being scraped (parent ``codigoOpea``);
+    do **not** reassign by ``numero_emissao`` alone — that number collides across
+    unrelated deals (e.g. CRA.228 vs CRI.228).
+
+    On ``(fonte, id_origem_arquivo)`` conflict, metadata is refreshed but
+    ``emissao_id`` is **not** overwritten — the first successful attachment wins.
+    Otherwise later scrapes of colliding parents (same natureza + E0NNN, different
+    vehicle) would steal documents from the earlier emission.
 
     Other sources keep deduping by ``(emissao_id, link_documento)``.
 
     ``data_insercao`` is deliberately never updated so it always reflects when the
     document was first added to the table.
     """
-    target_emissao_id = emissao_id
-    if fonte == "opea":
-        target_emissao_id = _resolve_canonical_emissao_id(
-            session, fonte, data.numero_emissao, emissao_id
-        )
-
-    values, id_origem_arquivo = _prepare_documento_values(target_emissao_id, fonte, data)
+    values, id_origem_arquivo = _prepare_documento_values(session, emissao_id, fonte, data)
     stmt = insert(_DOCUMENTO).values(**values)
-    update_set = {
-        "emissao_id": stmt.excluded.emissao_id,
+    metadata_update = {
         "isin": stmt.excluded.isin,
         "numero_emissao": stmt.excluded.numero_emissao,
         "codigo_cetip": stmt.excluded.codigo_cetip,
@@ -217,14 +305,16 @@ def upsert_documento(session: Session, emissao_id: int, fonte: str, data: Docume
     }
 
     if id_origem_arquivo:
+        # Keep the original emissao_id — do not let later scrapes reassign the row.
         stmt = stmt.on_conflict_do_update(
             index_elements=["fonte", "id_origem_arquivo"],
             index_where=text("id_origem_arquivo IS NOT NULL"),
-            set_=update_set,
+            set_=metadata_update,
         )
     else:
         stmt = stmt.on_conflict_do_update(
-            constraint="uq_documentos_emissao_link", set_=update_set
+            constraint="uq_documentos_emissao_link",
+            set_={**metadata_update, "emissao_id": stmt.excluded.emissao_id},
         )
     session.execute(stmt)
 
@@ -253,3 +343,47 @@ def count_emissoes(session: Session, fonte: str) -> int:
     return session.execute(
         select(func.count()).select_from(Emissao).where(Emissao.fonte == fonte)
     ).scalar_one()
+
+
+def count_emissoes_sem_detalhe(session: Session, fonte: str) -> int:
+    """Count emissions that have never had detail pages collected."""
+    return session.execute(
+        select(func.count())
+        .select_from(Emissao)
+        .where(Emissao.fonte == fonte, Emissao.detalhes_coletados.is_(False))
+    ).scalar_one()
+
+
+def count_table_rows(session: Session, fonte: str | None = None) -> dict[str, int]:
+    """Return row counts for the three core tables, optionally filtered by fonte."""
+    if fonte:
+        return {
+            "emissoes": int(
+                session.execute(
+                    select(func.count()).select_from(Emissao).where(Emissao.fonte == fonte)
+                ).scalar_one()
+            ),
+            "series": int(
+                session.execute(
+                    select(func.count()).select_from(Serie).where(Serie.fonte == fonte)
+                ).scalar_one()
+            ),
+            "documentos": int(
+                session.execute(
+                    select(func.count())
+                    .select_from(Documento)
+                    .where(Documento.fonte == fonte)
+                ).scalar_one()
+            ),
+        }
+    return {
+        "emissoes": int(
+            session.execute(select(func.count()).select_from(Emissao)).scalar_one()
+        ),
+        "series": int(
+            session.execute(select(func.count()).select_from(Serie)).scalar_one()
+        ),
+        "documentos": int(
+            session.execute(select(func.count()).select_from(Documento)).scalar_one()
+        ),
+    }
