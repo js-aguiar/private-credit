@@ -315,9 +315,13 @@ def get_emissao(session: Session, emissao_id: int) -> dict | None:
                 "numero_serie": serie.numero_serie,
                 "codigo_cetip": serie.codigo_cetip,
                 "isin": serie.isin,
+                "data_emissao": _as_iso(serie.data_emissao),
                 "data_vencimento": _as_iso(serie.data_vencimento),
                 "remuneracao": serie.remuneracao,
                 "indexador": serie.indexador,
+                "quantidade": serie.quantidade,
+                "valor": float(serie.valor) if serie.valor is not None else None,
+                "extras": _json_safe(serie.extras) if serie.extras else {},
             }
             for serie in series_rows
         ],

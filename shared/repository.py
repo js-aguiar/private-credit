@@ -233,16 +233,12 @@ def _resolve_canonical_emissao_id(
     numero_emissao: str | None,
     fallback_emissao_id: int,
 ) -> int:
-    """Pick one emission row for shared multi-série documents (lowest emissao_id)."""
-    if not numero_emissao:
-        return fallback_emissao_id
-    canonical = session.scalar(
-        select(func.min(Emissao.emissao_id)).where(
-            Emissao.fonte == fonte,
-            Emissao.numero_emissao == numero_emissao,
-        )
-    )
-    return int(canonical) if canonical is not None else fallback_emissao_id
+    """Legacy helper kept for maintenance scripts.
+
+    Prefer attaching documents to the emission currently being scraped. Grouping by
+    ``numero_emissao`` alone is unsafe for Opea (numbers collide across natures).
+    """
+    return fallback_emissao_id
 
 
 def _prepare_documento_values(
@@ -251,7 +247,7 @@ def _prepare_documento_values(
     fonte: str,
     data: DocumentoData,
 ) -> tuple[dict, str | None]:
-    """Normalize Opea links/ids and attach shared docs to the canonical emission."""
+    """Normalize Opea links/ids for storage on the given emission."""
     link = data.link_documento
     id_origem_arquivo = data.id_origem_arquivo
 
@@ -280,23 +276,16 @@ def upsert_documento(session: Session, emissao_id: int, fonte: str, data: Docume
 
     Opea documents dedupe globally by ``(fonte, id_origem_arquivo)`` using the stable
     cedoc file UUID. Presigned S3 URLs are normalized to the object path before storage.
-    Shared multi-série files are stored once under the canonical emission (lowest
-    ``emissao_id`` for the same ``fonte`` + ``numero_emissao``).
+    Documents attach to the emission row currently being scraped (parent ``codigoOpea``);
+    do **not** reassign by ``numero_emissao`` alone — that number collides across
+    unrelated deals (e.g. CRA.228 vs CRI.228).
 
     Other sources keep deduping by ``(emissao_id, link_documento)``.
 
     ``data_insercao`` is deliberately never updated so it always reflects when the
     document was first added to the table.
     """
-    target_emissao_id = emissao_id
-    if fonte == "opea":
-        target_emissao_id = _resolve_canonical_emissao_id(
-            session, fonte, data.numero_emissao, emissao_id
-        )
-
-    values, id_origem_arquivo = _prepare_documento_values(
-        session, target_emissao_id, fonte, data
-    )
+    values, id_origem_arquivo = _prepare_documento_values(session, emissao_id, fonte, data)
     stmt = insert(_DOCUMENTO).values(**values)
     update_set = {
         "emissao_id": stmt.excluded.emissao_id,

@@ -154,35 +154,33 @@ function renderSeries(series) {
   if (!series || !series.length) {
     return `<p class="section-empty">No series for this emission.</p>`;
   }
-  const rows = series
-    .map(
-      (serie) => `
-      <tr>
-        <td>${escapeHtml(dash(serie.numero_serie))}</td>
-        <td>${escapeHtml(dash(serie.codigo_cetip))}</td>
-        <td>${escapeHtml(dash(serie.isin))}</td>
-        <td>${escapeHtml(formatDate(serie.data_vencimento))}</td>
-        <td>${escapeHtml(dash(serie.remuneracao))}</td>
-        <td>${escapeHtml(dash(serie.indexador))}</td>
-      </tr>`
-    )
+  const blocks = series
+    .map((serie) => {
+      const extras = serie.extras || {};
+      return `
+      <div class="serie-card">
+        <div class="serie-card-head">
+          <strong>Série ${escapeHtml(dash(serie.numero_serie))}</strong>
+          <span class="muted">${escapeHtml(dash(extras.codigo_opea))}</span>
+        </div>
+        <div class="kv"><dt>CETIP</dt><dd>${escapeHtml(dash(serie.codigo_cetip))}</dd></div>
+        <div class="kv"><dt>ISIN</dt><dd>${escapeHtml(dash(serie.isin))}</dd></div>
+        <div class="kv"><dt>Issue date</dt><dd>${escapeHtml(formatDate(serie.data_emissao))}</dd></div>
+        <div class="kv"><dt>Maturity</dt><dd>${escapeHtml(formatDate(serie.data_vencimento))}</dd></div>
+        <div class="kv"><dt>Interest</dt><dd>${escapeHtml(dash(serie.remuneracao))}</dd></div>
+        <div class="kv"><dt>Qty issued</dt><dd>${escapeHtml(dash(serie.quantidade))}</dd></div>
+        <div class="kv"><dt>Qty settled</dt><dd>${escapeHtml(dash(extras.quantidade_integralizada))}</dd></div>
+        <div class="kv"><dt>Volume</dt><dd>${escapeHtml(dash(serie.valor))}</dd></div>
+        <div class="kv"><dt>Class</dt><dd>${escapeHtml(dash(extras.classe))}</dd></div>
+        <div class="kv"><dt>Concentration</dt><dd>${escapeHtml(dash(extras.concentracao))}</dd></div>
+        <div class="kv"><dt>Interest frequency</dt><dd>${escapeHtml(dash(extras.periodicidade_juros))}</dd></div>
+        <div class="kv"><dt>Amortization frequency</dt><dd>${escapeHtml(dash(extras.periodicidade_amortizacao))}</dd></div>
+        <div class="kv"><dt>Fiduciary agent</dt><dd>${escapeHtml(dash(extras.agente_fiduciario))}</dd></div>
+        <div class="kv"><dt>Segment</dt><dd>${escapeHtml(dash(extras.segmento))}</dd></div>
+      </div>`;
+    })
     .join("");
-  return `
-    <div class="table-wrap">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Série</th>
-            <th>CETIP</th>
-            <th>ISIN</th>
-            <th>Maturity</th>
-            <th>Interest</th>
-            <th>Indexer</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>`;
+  return `<div class="serie-list">${blocks}</div>`;
 }
 
 function renderDocuments(documentos) {

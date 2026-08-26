@@ -392,6 +392,31 @@ button.load-more:hover {
   font-size: 14px;
 }
 
+.serie-list {
+  display: grid;
+  gap: 12px;
+}
+
+.serie-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 4px 14px 8px;
+  background: #fbfbfd;
+}
+
+.serie-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  padding: 10px 0 4px;
+}
+
+.serie-card .kv {
+  grid-template-columns: 160px 1fr;
+  padding: 8px 0;
+}
+
 .table-wrap {
   overflow-x: auto;
   border: 1px solid var(--line);

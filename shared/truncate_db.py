@@ -22,6 +22,61 @@ class TruncateSummary:
     documentos: int
 
 
+@dataclass
+class DeleteFonteSummary:
+    fonte: str
+    emissoes: int
+    series: int
+    documentos: int
+
+
+def delete_fonte_rows(
+    fonte: str, config: ScraperConfig | None = None
+) -> DeleteFonteSummary:
+    """Delete all rows for one ``fonte`` (series/docs cascade from emissoes)."""
+    cfg = config or ScraperConfig.from_env("admin")
+    engine = get_engine(cfg)
+    fonte = (fonte or "").strip().lower()
+    if not fonte:
+        raise ValueError("fonte is required")
+
+    with engine.begin() as conn:
+        conn.execute(text("SET LOCAL lock_timeout = '60s'"))
+        before = {
+            "emissoes": int(
+                conn.execute(
+                    text("SELECT COUNT(*) FROM emissoes WHERE fonte = :fonte"),
+                    {"fonte": fonte},
+                ).scalar_one()
+            ),
+            "series": int(
+                conn.execute(
+                    text("SELECT COUNT(*) FROM series WHERE fonte = :fonte"),
+                    {"fonte": fonte},
+                ).scalar_one()
+            ),
+            "documentos": int(
+                conn.execute(
+                    text("SELECT COUNT(*) FROM documentos WHERE fonte = :fonte"),
+                    {"fonte": fonte},
+                ).scalar_one()
+            ),
+        }
+        conn.execute(text("DELETE FROM emissoes WHERE fonte = :fonte"), {"fonte": fonte})
+
+    summary = DeleteFonteSummary(fonte=fonte, **before)
+    logger.info(
+        "delete_fonte_done",
+        extra={
+            "fonte": fonte,
+            "emissoes_removed": summary.emissoes,
+            "series_removed": summary.series,
+            "documentos_removed": summary.documentos,
+        },
+    )
+    return summary
+
+
 def truncate_all_tables(config: ScraperConfig | None = None) -> TruncateSummary:
     """Remove every row from the three core tables and reset identity sequences."""
     cfg = config or ScraperConfig.from_env("admin")

@@ -29,6 +29,16 @@ def handler(event, context):
         logger.info("truncate_all_done", extra=payload)
         return {"statusCode": 200, "summary": payload}
 
+    if isinstance(event, dict) and event.get("action") == "delete_fonte":
+        from shared.truncate_db import delete_fonte_rows
+
+        fonte = str(event.get("fonte") or "opea").strip().lower()
+        logger.info("delete_fonte_start", extra={"fonte": fonte})
+        summary = delete_fonte_rows(fonte)
+        payload = summary.__dict__
+        logger.info("delete_fonte_done", extra=payload)
+        return {"statusCode": 200, "summary": payload}
+
     if isinstance(event, dict) and event.get("action") == "table_counts":
         from shared.table_counts import get_table_counts
 
