@@ -110,6 +110,12 @@ function renderRows(items, append) {
   }
 }
 
+function resolveUrl(url) {
+  if (!url) return null;
+  if (url.startsWith("/")) return `${API_BASE}${url}`;
+  return url;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -166,11 +172,11 @@ async function openDetail(id) {
       kv("Emission number", doc.numero_emissao),
       kv("CETIP", doc.codigo_cetip),
       kv("Operation", doc.operacao),
-      kv("Emission page", doc.emission_url, true),
+      kv("Emission page", doc.fonte === "opea" ? null : doc.emission_url, true),
       kv("Inserted", doc.inserted_at),
       extras,
-      doc.url
-        ? `<a class="open-link" href="${escapeHtml(doc.url)}" target="_blank" rel="noopener noreferrer">Open document</a>`
+      resolveUrl(doc.url)
+        ? `<a class="open-link" href="${escapeHtml(resolveUrl(doc.url))}" target="_blank" rel="noopener noreferrer">Open document</a>`
         : "",
     ].join("");
   } catch (error) {

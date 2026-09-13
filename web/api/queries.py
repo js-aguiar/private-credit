@@ -141,6 +141,48 @@ def list_documents(
     }
 
 
+
+def _public_document_url(documento: Documento) -> str:
+    """Return a browser-openable URL.
+
+    Opea stores stripped S3 paths (AccessDenied without signature), so the catalog
+    exposes a refresh/redirect endpoint instead of the bare object URL.
+    """
+    if documento.fonte == "opea":
+        return f"/api/documents/{documento.documento_id}/open"
+    return documento.link_documento
+
+
+def resolve_document_open_url(session: Session, documento_id: int) -> str | None:
+    """Resolve a working URL for Open document (refreshing Opea presigned links)."""
+    row = session.execute(
+        select(Documento, Emissao)
+        .join(Emissao, Documento.emissao_id == Emissao.emissao_id)
+        .where(Documento.documento_id == documento_id)
+    ).first()
+    if row is None:
+        return None
+    documento, emissao = row
+    if documento.fonte != "opea":
+        return documento.link_documento
+
+    extras = documento.extras or {}
+    emissao_extras = emissao.extras or {}
+    id_cedoc = (
+        extras.get("idCedoc")
+        or extras.get("id_cedoc")
+        or emissao_extras.get("idCedoc")
+        or emissao_extras.get("id_cedoc")
+    )
+    from shared.opea_documents import refresh_opea_presigned_url
+
+    return refresh_opea_presigned_url(
+        id_cedoc=str(id_cedoc or ""),
+        file_id=documento.id_origem_arquivo,
+        stored_url=documento.link_documento,
+    )
+
+
 def get_document(session: Session, documento_id: int) -> dict | None:
     row = session.execute(
         select(Documento, Emissao)
@@ -157,14 +199,14 @@ def get_document(session: Session, documento_id: int) -> dict | None:
         "document_type": documento.tipo_documento,
         "date": _as_iso(documento.data_documento),
         "inserted_at": _as_iso(documento.data_insercao),
-        "url": documento.link_documento,
+        "url": _public_document_url(documento),
         "fonte": documento.fonte,
         "company": emissao.devedor or emissao.operacao,
         "isin": documento.isin,
         "numero_emissao": documento.numero_emissao,
         "codigo_cetip": documento.codigo_cetip,
         "operacao": emissao.operacao,
-        "emission_url": emissao.link,
+        "emission_url": None if emissao.fonte == "opea" else emissao.link,
         "extras": _json_safe(extras) if extras else {},
     }
 
@@ -304,7 +346,7 @@ def get_emissao(session: Session, emissao_id: int) -> dict | None:
         "devedor": emissao.devedor,
         "fonte": emissao.fonte,
         "numero_emissao": emissao.numero_emissao,
-        "link": emissao.link,
+        "link": None if emissao.fonte == "opea" else emissao.link,
         "isin": emissao.isin,
         "codigos_cetip": emissao.codigos_cetip,
         "data_emissao": _as_iso(emissao.data_emissao),
@@ -331,7 +373,7 @@ def get_emissao(session: Session, emissao_id: int) -> dict | None:
                 "titulo": documento.titulo,
                 "tipo_documento": documento.tipo_documento,
                 "data_documento": _as_iso(documento.data_documento),
-                "url": documento.link_documento,
+                "url": _public_document_url(documento),
             }
             for documento in doc_rows
         ],

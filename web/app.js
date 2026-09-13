@@ -74,6 +74,12 @@ function fonteLabel(fonte) {
   return FONTE_LABELS[fonte] || fonte || "—";
 }
 
+function resolveUrl(url) {
+  if (!url) return null;
+  if (url.startsWith("/")) return `${API_BASE}${url}`;
+  return url;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -193,8 +199,9 @@ function renderDocuments(documentos) {
       const meta = [doc.tipo_documento, formatDate(doc.data_documento)]
         .filter((part) => part && part !== "—")
         .join(" · ");
-      const link = doc.url
-        ? `<a href="${escapeHtml(doc.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>`
+      const href = resolveUrl(doc.url);
+      const link = href
+        ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>`
         : escapeHtml(title);
       return `<li class="doc-item"><div class="doc-title">${link}</div><div class="muted">${escapeHtml(meta || "—")}</div></li>`;
     })
@@ -220,7 +227,7 @@ async function openDetail(id) {
       kv("CETIP", data.codigos_cetip),
       kv("Issue date", formatDate(data.data_emissao)),
       kv("Maturity", formatDate(data.data_vencimento)),
-      kv("Emission page", data.link, true),
+      kv("Emission page", data.fonte === "opea" ? null : data.link, true),
       `</section>`,
       `<section class="detail-section"><h3>Series (${(data.series || []).length})</h3>`,
       renderSeries(data.series),

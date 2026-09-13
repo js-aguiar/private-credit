@@ -19,12 +19,14 @@ from queries import (
     list_emissoes,
     list_emissoes_filters,
     list_filters,
+    resolve_document_open_url,
 )
 
 from shared.config import ScraperConfig
 from shared.db import session_scope
 from shared.logging_config import configure_logging, get_logger
 
+_DOC_OPEN = re.compile(r"^/api/documents/(\d+)/open/?$")
 _DOC_DETAIL = re.compile(r"^/api/documents/(\d+)/?$")
 _DOC_LIST = re.compile(r"^/api/documents/?$")
 _FILTERS = re.compile(r"^/api/filters/?$")
@@ -71,6 +73,13 @@ def handler(event, context):
             params = _emissao_list_params(query)
             with session_scope(config) as session:
                 return _response(200, list_emissoes(session, **params))
+        open_match = _DOC_OPEN.match(path)
+        if open_match:
+            with session_scope(config) as session:
+                target = resolve_document_open_url(session, int(open_match.group(1)))
+            if target is None:
+                return _response(404, {"error": "not_found"})
+            return _redirect(target)
         detail = _DOC_DETAIL.match(path)
         if detail:
             with session_scope(config) as session:
@@ -162,3 +171,12 @@ def _response(status: int, body: dict | None) -> dict:
     }
     payload = "" if body is None else json.dumps(body, ensure_ascii=False, default=str)
     return {"statusCode": status, "headers": headers, "body": payload}
+
+
+def _redirect(location: str) -> dict:
+    headers = {
+        "location": location,
+        "cache-control": "no-store",
+        **_CORS_HEADERS,
+    }
+    return {"statusCode": 302, "headers": headers, "body": ""}

@@ -267,12 +267,12 @@ def group_list_items(items: list[dict]) -> list[EmissaoData]:
             if (row.get("isin") or "").strip()
         ]
         unique_isins = list(dict.fromkeys(isins))
-        first_codigo = series_codigos[0]
         emissoes.append(
             EmissaoData(
                 fonte="opea",
                 id_origem=parent,
-                link=f"https://app.opea.com.br/pt/emissoes/{first_codigo}",
+                # Opea portal pages are série-scoped; parent emission URLs are not public.
+                link=None,
                 isin=unique_isins[0] if len(unique_isins) == 1 else None,
                 numero_emissao=str(numero) if numero is not None else None,
                 codigos_cetip=" ".join(cetips) or None,
