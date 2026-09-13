@@ -240,10 +240,10 @@ class RizaScraper(BaseScraper):
                         "data_integralizacao": first_payment.isoformat()
                         if first_payment
                         else None,
-                        "taxa_juros_spread": interest_rate,
-                        "valor_unitario": _to_decimal(unit_value),
+                        "taxa_juros_spread": _to_json_number(interest_rate),
+                        "valor_unitario": _to_json_number(unit_value),
                         "quantidade_papeis": _to_int(amount),
-                        "volume_total": _to_decimal(total_value),
+                        "volume_total": _to_json_number(total_value),
                         "params": params or None,
                         "nextAnniversary": item.get("nextAnniversary"),
                         "outras_informacoes": {
@@ -257,11 +257,11 @@ class RizaScraper(BaseScraper):
                             else None,
                             "data_vencimento": str(item.get("dueDate") or "")[:10]
                             or None,
-                            "taxa_juros_spread": interest_rate,
+                            "taxa_juros_spread": _to_json_number(interest_rate),
                             "indexador": indexador,
-                            "volume_total": _to_decimal(total_value),
+                            "volume_total": _to_json_number(total_value),
                             "quantidade_papeis": _to_int(amount),
-                            "valor_unitario": _to_decimal(unit_value),
+                            "valor_unitario": _to_json_number(unit_value),
                         },
                     },
                 )
@@ -353,6 +353,25 @@ def _to_decimal(value: Any) -> Decimal | None:
         return Decimal(str(value))
     except (InvalidOperation, ValueError, TypeError):
         return None
+
+
+def _to_json_number(value: Any) -> float | int | None:
+    """JSONB-safe numeric (Decimal is not JSON-serializable via psycopg2)."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, Decimal):
+        as_int = value.to_integral_value()
+        if as_int == value:
+            return int(as_int)
+        return float(value)
+    try:
+        num = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    as_int = num.to_integral_value()
+    if as_int == num:
+        return int(as_int)
+    return float(num)
 
 
 def _to_int(value: Any) -> int | None:

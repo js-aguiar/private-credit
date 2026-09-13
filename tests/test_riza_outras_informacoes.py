@@ -79,12 +79,14 @@ def test_extract_series_outras_informacoes():
     assert senior.data_vencimento == date(2035, 10, 15)
     assert senior.extras["tipo"] == "sênior"
     assert senior.extras["icvm"] == "160"
-    assert senior.extras["valor_unitario"] == Decimal("1000")
+    assert senior.extras["valor_unitario"] == 1000
     outras = senior.extras["outras_informacoes"]
     assert outras["codigo_if"] == "26H3422746"
     assert outras["codigo_isin"] == "BRIMWLCRIQW3"
     assert outras["quantidade_papeis"] == 61980
     assert outras["taxa_juros_spread"] == 11.0
+    assert outras["volume_total"] == 61980000
+    assert outras["valor_unitario"] == 1000
 
     sub = series[1]
     assert sub.numero_serie == "2"
