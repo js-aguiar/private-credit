@@ -44,3 +44,21 @@ fails against a plain local Postgres.
   ruff findings — that is expected, not caused by setup.
 - Tests: `pytest`. `testpaths=["tests"]` is configured but there is **no `tests/` directory**, so
   pytest currently collects 0 tests (exit code 5).
+
+### EC2 full backfill (AWS)
+- Stack: `br-sec-scrapers-backfill` (launch template, backfill SSM prefix, log group).
+- Launch: `python scripts/launch_ec2_backfill.py` after `cdk deploy br-sec-scrapers-backfill`.
+- Logs: CloudWatch `/{prefix}/ec2-backfill` — JSON fields include `execution_mode` (`ec2_backfill`
+  vs `lambda`) and `run_id` (same shape as Lambda handlers).
+- Politeness: EC2 reads `/{prefix}/backfill/` SSM (default 2s delay, 20 req/min). Lambdas keep
+  per-scraper `/{prefix}/{source}/` defaults (8s, 6 req/min).
+- Max runtime: 24h (`backfill_max_hours` CDK context); instance self-terminates and deletes EBS.
+- Incomplete backfill is OK — twice-daily Lambdas drain remaining `detalhes_coletados=false` rows.
+
+### Public catalog (S3 + CloudFront + VPC Lambda)
+- Stack: `br-sec-scrapers-web`. Deploy with `cd infra && cdk deploy br-sec-scrapers-web`.
+- CatalogUrl output is the CDN base. **`/` is Emissões** (list/detail + company/CETIP/ISIN filters);
+  **`/documentos` is the documents catalog** (CloudFront Function rewrites to `documentos.html` —
+  without that rewrite, SPA 403/404 fallback would serve the emissoes `index.html`).
+- API: `/api/emissoes`, `/api/emissoes/{id}`, `/api/emissoes/filters`, plus existing `/api/documents*`.
+- Local: serve `web/` static files and run `python web/api/local.py` (see `web/api/local.py`).

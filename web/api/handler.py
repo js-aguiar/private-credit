@@ -1,4 +1,4 @@
-"""AWS Lambda entrypoint for the read-only document catalog API.
+"""AWS Lambda entrypoint for the read-only catalog API.
 
 Handles API Gateway HTTP API (payload v2) events. SQL is SELECT-only; the browser
 never receives database credentials.
@@ -11,15 +11,28 @@ import re
 from datetime import date
 from urllib.parse import parse_qs
 
-from queries import DEFAULT_LIMIT, get_document, list_documents, list_filters
+from queries import (
+    DEFAULT_LIMIT,
+    get_document,
+    get_emissao,
+    list_documents,
+    list_emissoes,
+    list_emissoes_filters,
+    list_filters,
+    resolve_document_open_url,
+)
 
 from shared.config import ScraperConfig
 from shared.db import session_scope
 from shared.logging_config import configure_logging, get_logger
 
+_DOC_OPEN = re.compile(r"^/api/documents/(\d+)/open/?$")
 _DOC_DETAIL = re.compile(r"^/api/documents/(\d+)/?$")
 _DOC_LIST = re.compile(r"^/api/documents/?$")
 _FILTERS = re.compile(r"^/api/filters/?$")
+_EMISSAO_FILTERS = re.compile(r"^/api/emissoes/filters/?$")
+_EMISSAO_DETAIL = re.compile(r"^/api/emissoes/(\d+)/?$")
+_EMISSAO_LIST = re.compile(r"^/api/emissoes/?$")
 
 _CORS_HEADERS = {
     "access-control-allow-origin": "*",
@@ -46,6 +59,27 @@ def handler(event, context):
         if _FILTERS.match(path):
             with session_scope(config) as session:
                 return _response(200, list_filters(session))
+        if _EMISSAO_FILTERS.match(path):
+            with session_scope(config) as session:
+                return _response(200, list_emissoes_filters(session))
+        emissao_detail = _EMISSAO_DETAIL.match(path)
+        if emissao_detail:
+            with session_scope(config) as session:
+                payload = get_emissao(session, int(emissao_detail.group(1)))
+            if payload is None:
+                return _response(404, {"error": "not_found"})
+            return _response(200, payload)
+        if _EMISSAO_LIST.match(path):
+            params = _emissao_list_params(query)
+            with session_scope(config) as session:
+                return _response(200, list_emissoes(session, **params))
+        open_match = _DOC_OPEN.match(path)
+        if open_match:
+            with session_scope(config) as session:
+                target = resolve_document_open_url(session, int(open_match.group(1)))
+            if target is None:
+                return _response(404, {"error": "not_found"})
+            return _redirect(target)
         detail = _DOC_DETAIL.match(path)
         if detail:
             with session_scope(config) as session:
@@ -92,6 +126,17 @@ def _list_params(query: dict[str, str]) -> dict:
     }
 
 
+def _emissao_list_params(query: dict[str, str]) -> dict:
+    return {
+        "fonte": _opt_str(query.get("fonte")),
+        "company": _opt_str(query.get("company") or query.get("devedor")),
+        "cetip": _opt_str(query.get("cetip")),
+        "isin": _opt_str(query.get("isin")),
+        "limit": _opt_int(query.get("limit"), DEFAULT_LIMIT),
+        "offset": _opt_int(query.get("offset"), 0),
+    }
+
+
 def _opt_str(value: str | None) -> str | None:
     if value is None:
         return None
@@ -126,3 +171,12 @@ def _response(status: int, body: dict | None) -> dict:
     }
     payload = "" if body is None else json.dumps(body, ensure_ascii=False, default=str)
     return {"statusCode": status, "headers": headers, "body": payload}
+
+
+def _redirect(location: str) -> dict:
+    headers = {
+        "location": location,
+        "cache-control": "no-store",
+        **_CORS_HEADERS,
+    }
+    return {"statusCode": 302, "headers": headers, "body": ""}

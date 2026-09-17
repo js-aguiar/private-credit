@@ -91,10 +91,11 @@ class VertScraper(BaseScraper):
             if isinstance(s, dict) and s.get("codeIsin")
         ]
         series_numbers = [
-            str(s.get("seriesNumber")).strip()
+            _normalize_serie_numero(s.get("seriesNumber"))
             for s in series
             if isinstance(s, dict) and s.get("seriesNumber") is not None
         ]
+        series_numbers = [n for n in series_numbers if n]
 
         return EmissaoData(
             fonte=self.source_name,
@@ -144,12 +145,12 @@ class VertScraper(BaseScraper):
         for item in series_payload:
             if not isinstance(item, dict):
                 continue
-            numero = item.get("seriesNumber")
-            if numero is None:
+            numero = _normalize_serie_numero(item.get("seriesNumber"))
+            if not numero:
                 continue
             series.append(
                 SerieData(
-                    numero_serie=str(numero),
+                    numero_serie=numero,
                     isin=(item.get("codeIsin") or "").strip() or None,
                     numero_emissao=emissao.numero_emissao,
                     codigo_cetip=(item.get("codeCetip") or "").strip() or None,
@@ -207,12 +208,16 @@ class VertScraper(BaseScraper):
                     doc = self._map_document(item, emissao)
                     if doc is None:
                         continue
-                    dedupe_key = str(
-                        (doc.extras or {}).get("vert_document_id") or doc.link_documento
-                    )
-                    if dedupe_key in seen:
+                    # Prefer canonical URL for in-run dedupe: the same S3 object can appear
+                    # under multiple Vert document ids / categories.
+                    link_key = doc.link_documento or ""
+                    id_key = str((doc.extras or {}).get("vert_document_id") or "")
+                    if (link_key and link_key in seen) or (id_key and id_key in seen):
                         continue
-                    seen.add(dedupe_key)
+                    if link_key:
+                        seen.add(link_key)
+                    if id_key:
+                        seen.add(id_key)
                     docs.append(doc)
 
                 if not rows or page + 1 >= total_pages:
@@ -230,8 +235,10 @@ class VertScraper(BaseScraper):
             return None
 
         doc_id = item.get("id")
+        id_origem_arquivo = str(doc_id).strip() if doc_id is not None else None
         return DocumentoData(
             link_documento=url,
+            id_origem_arquivo=id_origem_arquivo or None,
             titulo=item.get("name"),
             tipo_documento=item.get("category"),
             data_documento=parse_br_date(str(item.get("referenceDate") or "")[:10]),
@@ -258,9 +265,14 @@ class VertScraper(BaseScraper):
         if any(doc.link_documento == url for doc in documentos):
             return documentos
 
+        # lastReport often lacks a numeric document id; fall back to link-only dedupe.
+        report_id = last_report.get("id")
+        id_origem_arquivo = str(report_id).strip() if report_id is not None else None
+
         documentos.append(
             DocumentoData(
                 link_documento=url,
+                id_origem_arquivo=id_origem_arquivo or None,
                 titulo=last_report.get("name"),
                 tipo_documento="Relatórios",
                 data_documento=parse_br_date(str(last_report.get("referenceDate") or "")[:10]),
@@ -268,7 +280,7 @@ class VertScraper(BaseScraper):
                 codigo_cetip=(emissao.codigos_cetip or "").split()[0]
                 if emissao.codigos_cetip
                 else None,
-                extras=last_report,
+                extras={**last_report, "vert_document_id": report_id},
             )
         )
         return documentos
@@ -291,3 +303,17 @@ class VertScraper(BaseScraper):
             return url.strip()
         host = parts.netloc.replace(".s3.sa-east-1.amazonaws.com", ".s3.amazonaws.com")
         return urlunsplit((parts.scheme, host, parts.path, "", ""))
+
+
+def _normalize_serie_numero(value: Any) -> str:
+    """Normalize API série numbers like ``1.0`` → ``1``."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        as_float = float(raw)
+        if as_float == int(as_float):
+            return str(int(as_float))
+    except (ValueError, TypeError, OverflowError):
+        pass
+    return raw

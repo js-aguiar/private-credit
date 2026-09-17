@@ -112,11 +112,12 @@ cdk deploy --all
 ```
 
 This provisions: a VPC (with a low-cost NAT instance), an RDS PostgreSQL
-`db.t4g.micro` (single-AZ, private), four Lambda container functions (built from
+`db.t4g.micro` (single-AZ, private), five Lambda container functions (built from
 `scrapers/*/Dockerfile`), IAM roles, SSM parameters, CloudWatch log groups + error
 alarms, an SNS topic for alerts, **EventBridge Scheduler** schedules that invoke
-each scraper twice daily, and a **document catalog** (private S3 + CloudFront
-HTTPS + API Gateway HTTP API + VPC Lambda).
+each scraper twice daily, an **EC2 backfill launch template** (one-off full catalog
+runs), and a **document catalog** (private S3 + CloudFront HTTPS + API Gateway HTTP
+API + VPC Lambda).
 
 The catalog URL is the `CatalogUrl` CloudFormation output
 (`https://<distribution>.cloudfront.net`). The browser never talks to RDS: CloudFront
@@ -142,9 +143,39 @@ Daily runs only invoke the existing handlers (idempotent upserts). Schema is **n
 auto-created on Lambda (`AUTO_CREATE_SCHEMA=false`); create tables once with
 `scripts/init_db.py` (or the first local backfill).
 
-The **initial full backfill** is still best run with `scripts/run_local.py` (no
-15-minute Lambda limit). After that, these incremental scheduled invocations stay
-well within the limit.
+The **initial full backfill** can run on a one-off **EC2 instance** (recommended for
+production RDS) or locally with `scripts/run_local.py` (no 15-minute Lambda limit).
+After that, scheduled Lambda invocations stay within the limit and finish any rows
+the backfill did not reach.
+
+### EC2 full backfill
+
+The `br-sec-scrapers-backfill` stack defines a launch template (default **`t4g.small`**,
+overridable via `-c backfill_instance_type=...`), backfill-specific SSM tunables under
+`/{prefix}/backfill/` (default **2s** delay, **20** req/min — faster than Lambda but
+still polite), and a CloudWatch log group `/{prefix}/ec2-backfill`.
+
+Deploy the stack (included in `cdk deploy --all`):
+
+```bash
+cd infra && cdk deploy br-sec-scrapers-backfill
+```
+
+Launch a backfill run (does **not** start automatically on deploy):
+
+```bash
+python scripts/launch_ec2_backfill.py
+aws logs tail /br-sec-scrapers/ec2-backfill --follow
+```
+
+The instance runs all five scrapers sequentially via `scripts/run_backfill_all.py`,
+connects to RDS using Secrets Manager, logs JSON lines with `execution_mode=ec2_backfill`
+and a shared `run_id`, then **terminates itself** when finished or after **24 hours**
+(configurable with `-c backfill_max_hours=24`). Root EBS is deleted on termination;
+any extra attached volumes are explicitly deleted in `scripts/ec2_backfill_teardown.sh`.
+
+If the deadline is hit before every emission has details, **scheduled Lambdas** continue
+incrementally using the same detail queue (`detalhes_coletados=false` first).
 
 Override at deploy time (or in `infra/cdk.json`):
 

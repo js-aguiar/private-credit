@@ -8,10 +8,9 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from shared.config import ScraperConfig
-from shared.db import get_engine, session_scope
-from shared.models import Documento, Emissao
+from shared.db import session_scope
+from shared.models import Documento
 from shared.opea_documents import normalize_opea_document_url, opea_file_id
-from shared.repository import _resolve_canonical_emissao_id
 
 
 @dataclass
@@ -139,16 +138,12 @@ def remove_duplicate_opea_documents(session: Session) -> int:
 
 
 def reassign_opea_documents_to_canonical_emissions(session: Session) -> int:
-    reassigned = 0
-    docs = session.scalars(select(Documento).where(Documento.fonte == "opea")).all()
-    for doc in docs:
-        canonical = _resolve_canonical_emissao_id(
-            session, doc.fonte, doc.numero_emissao, doc.emissao_id
-        )
-        if doc.emissao_id != canonical:
-            doc.emissao_id = canonical
-            reassigned += 1
-    return reassigned
+    """No-op: Opea docs stay on the parent emission that scraped them.
+
+    Reassigning by ``numero_emissao`` alone incorrectly merges unrelated deals that
+    share an emission number (e.g. CRA.228 vs CRI.228).
+    """
+    return 0
 
 
 def count_opea_documents(session: Session) -> int:
