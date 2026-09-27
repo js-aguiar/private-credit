@@ -93,13 +93,6 @@ function setStatus(message, show = true) {
   els.status.textContent = message || "";
 }
 
-function codesSummary(item) {
-  const parts = [];
-  if (item.isin) parts.push(item.isin);
-  if (item.codigo_cetip) parts.push(item.codigo_cetip);
-  return parts.join(" · ") || "—";
-}
-
 async function loadFilters() {
   const data = await api("/api/series/filters");
   for (const fonte of data.fontes || []) {
@@ -116,14 +109,13 @@ function renderRows(items, append) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "row row-emissoes";
-    const serieLabel = item.numero_serie
-      ? `${dash(item.numero_emissao)} / ${item.numero_serie}`
-      : dash(item.numero_emissao);
     button.innerHTML = `
       <span>${escapeHtml(dash(item.company))}</span>
       <span class="muted">${escapeHtml(fonteLabel(item.fonte))}</span>
-      <span class="muted">${escapeHtml(serieLabel)}</span>
-      <span class="muted codes">${escapeHtml(codesSummary(item))}</span>
+      <span class="muted codes">${escapeHtml(dash(item.isin))}</span>
+      <span class="muted codes">${escapeHtml(dash(item.codigo_cetip))}</span>
+      <span class="muted">${escapeHtml(formatDate(item.data_emissao))}</span>
+      <span class="muted">${escapeHtml(formatDate(item.data_vencimento))}</span>
     `;
     button.addEventListener("click", () => openDetail(item.id));
     els.list.append(button);
@@ -179,19 +171,6 @@ function renderDocuments(documentos) {
   return `<ul class="doc-list">${items}</ul>`;
 }
 
-function renderSiblings(siblings) {
-  if (!siblings || !siblings.length) return "";
-  const items = siblings
-    .map(
-      (s) =>
-        `<li><button type="button" class="linkish" data-serie-id="${s.id}">Série ${escapeHtml(
-          dash(s.numero_serie)
-        )} · ${escapeHtml(dash(s.codigo_cetip || s.isin))}</button></li>`
-    )
-    .join("");
-  return `<section class="detail-section"><h3>Related séries</h3><ul class="doc-list">${items}</ul></section>`;
-}
-
 async function openDetail(id) {
   els.sheet.hidden = false;
   els.sheetTitle.textContent = "Série";
@@ -223,14 +202,10 @@ async function openDetail(id) {
       kv("Segment", extras.segmento),
       kv("Portal page", data.fonte === "opea" ? null : data.link, true),
       `</section>`,
-      renderSiblings(data.siblings),
       `<section class="detail-section"><h3>Documents (${(data.documentos || []).length})</h3>`,
       renderDocuments(data.documentos),
       `</section>`,
     ].join("");
-    els.sheetBody.querySelectorAll("[data-serie-id]").forEach((button) => {
-      button.addEventListener("click", () => openDetail(button.dataset.serieId));
-    });
   } catch (error) {
     els.sheetBody.innerHTML = `<p class="status">${escapeHtml(error.message)}</p>`;
   }

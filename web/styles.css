@@ -208,7 +208,7 @@ button.load-more:hover {
 
 .list-head-emissoes,
 .row-emissoes {
-  grid-template-columns: 1.4fr 90px 80px 1.4fr;
+  grid-template-columns: 1.5fr 90px 1.1fr 1.1fr 0.9fr 0.9fr;
 }
 
 .row-emissoes .codes {
