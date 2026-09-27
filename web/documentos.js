@@ -162,6 +162,17 @@ async function openDetail(id) {
     const extras = doc.extras && Object.keys(doc.extras).length
       ? kv("Extras", JSON.stringify(doc.extras, null, 2))
       : "";
+    const series = doc.series || [];
+    const seriesBlock = series.length
+      ? `<div class="kv"><dt>Linked séries</dt><dd>${series
+          .map(
+            (s) =>
+              `${escapeHtml(dash(s.numero_serie))} · ${escapeHtml(
+                dash(s.codigo_cetip || s.isin)
+              )}`
+          )
+          .join("<br>")}</dd></div>`
+      : "";
     els.sheetBody.innerHTML = [
       kv("Company", doc.company),
       kv("Date", formatDate(doc.date)),
@@ -172,7 +183,8 @@ async function openDetail(id) {
       kv("Emission number", doc.numero_emissao),
       kv("CETIP", doc.codigo_cetip),
       kv("Operation", doc.operacao),
-      kv("Emission page", doc.fonte === "opea" ? null : doc.emission_url, true),
+      seriesBlock,
+      kv("Portal page", doc.fonte === "opea" ? null : doc.emission_url, true),
       kv("Inserted", doc.inserted_at),
       extras,
       resolveUrl(doc.url)

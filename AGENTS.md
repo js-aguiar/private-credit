@@ -4,9 +4,11 @@
 
 This repo is **BR Securitization Scrapers**: a set of Python 3.12 batch/CLI scrapers for five
 Brazilian securitization sites (`ecoagro`, `opea`, `riza`, `vert`, `bari`) that upsert into a
-PostgreSQL database (`emissoes`, `series`, `documentos`). There is **no long-running dev
-server** — "running the app" means invoking a scraper via `scripts/run_local.py`. Standard
-setup/run commands live in `README.md`; only non-obvious notes are captured below.
+PostgreSQL database (`series`, `documentos`, `documentos_series`). Series-first: `series` is
+the primary entity (UNIQUE `isin` / `codigo_cetip` when present); `emissoes` no longer exists.
+There is **no long-running dev server** — "running the app" means invoking a scraper via
+`scripts/run_local.py`. Standard setup/run commands live in `README.md`; only non-obvious
+notes are captured below.
 
 ### Product code lives on `main`
 Application code is on `main` (historically developed on `feat/br-scrapers` and
@@ -57,8 +59,11 @@ fails against a plain local Postgres.
 
 ### Public catalog (S3 + CloudFront + VPC Lambda)
 - Stack: `br-sec-scrapers-web`. Deploy with `cd infra && cdk deploy br-sec-scrapers-web`.
-- CatalogUrl output is the CDN base. **`/` is Emissões** (list/detail + company/CETIP/ISIN filters);
-  **`/documentos` is the documents catalog** (CloudFront Function rewrites to `documentos.html` —
-  without that rewrite, SPA 403/404 fallback would serve the emissoes `index.html`).
-- API: `/api/emissoes`, `/api/emissoes/{id}`, `/api/emissoes/filters`, plus existing `/api/documents*`.
+- CatalogUrl output is the CDN base. **`/` is Séries** (list/detail + company/CETIP/ISIN filters);
+ **`/documentos` is the documents catalog** (CloudFront Function rewrites to `documentos.html` —
+ without that rewrite, SPA 403/404 fallback would serve the séries `index.html`).
+- API: `/api/series`, `/api/series/{id}`, `/api/series/filters`, plus existing `/api/documents*`.
+  Legacy `/api/emissoes*` routes still resolve to the series handlers.
 - Local: serve `web/` static files and run `python web/api/local.py` (see `web/api/local.py`).
+- Schema changes are breaking: local DBs need `python scripts/init_db.py` (DDL drops/recreates
+  core tables) then a re-scrape/backfill.

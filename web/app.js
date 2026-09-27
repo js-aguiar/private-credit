@@ -20,7 +20,7 @@ const els = {
   isin: document.getElementById("filter-isin"),
   fonte: document.getElementById("filter-fonte"),
   reset: document.getElementById("reset-filters"),
-  list: document.getElementById("emissao-list"),
+  list: document.getElementById("serie-list"),
   status: document.getElementById("status"),
   more: document.getElementById("load-more"),
   count: document.getElementById("result-count"),
@@ -96,12 +96,12 @@ function setStatus(message, show = true) {
 function codesSummary(item) {
   const parts = [];
   if (item.isin) parts.push(item.isin);
-  if (item.codigos_cetip) parts.push(item.codigos_cetip);
+  if (item.codigo_cetip) parts.push(item.codigo_cetip);
   return parts.join(" · ") || "—";
 }
 
 async function loadFilters() {
-  const data = await api("/api/emissoes/filters");
+  const data = await api("/api/series/filters");
   for (const fonte of data.fontes || []) {
     els.fonte.append(option(fonte, fonteLabel(fonte)));
   }
@@ -116,10 +116,13 @@ function renderRows(items, append) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "row row-emissoes";
+    const serieLabel = item.numero_serie
+      ? `${dash(item.numero_emissao)} / ${item.numero_serie}`
+      : dash(item.numero_emissao);
     button.innerHTML = `
       <span>${escapeHtml(dash(item.company))}</span>
       <span class="muted">${escapeHtml(fonteLabel(item.fonte))}</span>
-      <span class="muted">${escapeHtml(dash(item.numero_emissao))}</span>
+      <span class="muted">${escapeHtml(serieLabel)}</span>
       <span class="muted codes">${escapeHtml(codesSummary(item))}</span>
     `;
     button.addEventListener("click", () => openDetail(item.id));
@@ -127,21 +130,21 @@ function renderRows(items, append) {
   }
 }
 
-async function loadEmissoes(append = false) {
+async function loadSeries(append = false) {
   if (loading) return;
   loading = true;
   if (!append) setStatus("Loading…");
   try {
-    const data = await api(`/api/emissoes?${queryFromForm().toString()}`);
+    const data = await api(`/api/series?${queryFromForm().toString()}`);
     total = data.total || 0;
     renderRows(data.items || [], append);
     offset = (data.offset || 0) + (data.items || []).length;
     els.more.hidden = !data.has_more;
-    els.count.textContent = total === 1 ? "1 emission" : `${total} emissions`;
-    if (total === 0) setStatus("No emissions match these filters.");
+    els.count.textContent = total === 1 ? "1 série" : `${total} séries`;
+    if (total === 0) setStatus("No séries match these filters.");
     else setStatus("", false);
   } catch (error) {
-    setStatus(error.message || "Could not load emissions.");
+    setStatus(error.message || "Could not load séries.");
   } finally {
     loading = false;
   }
@@ -156,42 +159,9 @@ function kv(label, value, isLink = false) {
   return `<div class="kv"><dt>${escapeHtml(label)}</dt><dd>${inner}</dd></div>`;
 }
 
-function renderSeries(series) {
-  if (!series || !series.length) {
-    return `<p class="section-empty">No series for this emission.</p>`;
-  }
-  const blocks = series
-    .map((serie) => {
-      const extras = serie.extras || {};
-      return `
-      <div class="serie-card">
-        <div class="serie-card-head">
-          <strong>Série ${escapeHtml(dash(serie.numero_serie))}</strong>
-          <span class="muted">${escapeHtml(dash(extras.codigo_opea))}</span>
-        </div>
-        <div class="kv"><dt>CETIP</dt><dd>${escapeHtml(dash(serie.codigo_cetip))}</dd></div>
-        <div class="kv"><dt>ISIN</dt><dd>${escapeHtml(dash(serie.isin))}</dd></div>
-        <div class="kv"><dt>Issue date</dt><dd>${escapeHtml(formatDate(serie.data_emissao))}</dd></div>
-        <div class="kv"><dt>Maturity</dt><dd>${escapeHtml(formatDate(serie.data_vencimento))}</dd></div>
-        <div class="kv"><dt>Interest</dt><dd>${escapeHtml(dash(serie.remuneracao))}</dd></div>
-        <div class="kv"><dt>Qty issued</dt><dd>${escapeHtml(dash(serie.quantidade))}</dd></div>
-        <div class="kv"><dt>Qty settled</dt><dd>${escapeHtml(dash(extras.quantidade_integralizada))}</dd></div>
-        <div class="kv"><dt>Volume</dt><dd>${escapeHtml(dash(serie.valor))}</dd></div>
-        <div class="kv"><dt>Class</dt><dd>${escapeHtml(dash(extras.classe))}</dd></div>
-        <div class="kv"><dt>Concentration</dt><dd>${escapeHtml(dash(extras.concentracao))}</dd></div>
-        <div class="kv"><dt>Interest frequency</dt><dd>${escapeHtml(dash(extras.periodicidade_juros))}</dd></div>
-        <div class="kv"><dt>Amortization frequency</dt><dd>${escapeHtml(dash(extras.periodicidade_amortizacao))}</dd></div>
-        <div class="kv"><dt>Fiduciary agent</dt><dd>${escapeHtml(dash(extras.agente_fiduciario))}</dd></div>
-        <div class="kv"><dt>Segment</dt><dd>${escapeHtml(dash(extras.segmento))}</dd></div>
-      </div>`;
-    })
-    .join("");
-  return `<div class="serie-list">${blocks}</div>`;
-}
-
 function renderDocuments(documentos) {
   if (!documentos || !documentos.length) {
-    return `<p class="section-empty">No documents for this emission.</p>`;
+    return `<p class="section-empty">No documents for this série.</p>`;
   }
   const items = documentos
     .map((doc) => {
@@ -209,33 +179,58 @@ function renderDocuments(documentos) {
   return `<ul class="doc-list">${items}</ul>`;
 }
 
+function renderSiblings(siblings) {
+  if (!siblings || !siblings.length) return "";
+  const items = siblings
+    .map(
+      (s) =>
+        `<li><button type="button" class="linkish" data-serie-id="${s.id}">Série ${escapeHtml(
+          dash(s.numero_serie)
+        )} · ${escapeHtml(dash(s.codigo_cetip || s.isin))}</button></li>`
+    )
+    .join("");
+  return `<section class="detail-section"><h3>Related séries</h3><ul class="doc-list">${items}</ul></section>`;
+}
+
 async function openDetail(id) {
   els.sheet.hidden = false;
-  els.sheetTitle.textContent = "Emission";
+  els.sheetTitle.textContent = "Série";
   els.sheetBody.innerHTML = `<p class="status">Loading…</p>`;
   try {
-    const data = await api(`/api/emissoes/${id}`);
-    els.sheetTitle.textContent = data.company || data.operacao || "Emission";
+    const data = await api(`/api/series/${id}`);
+    const extras = data.extras || {};
+    els.sheetTitle.textContent =
+      data.company || data.operacao || `Série ${dash(data.numero_serie)}`;
     els.sheetBody.innerHTML = [
-      `<section class="detail-section"><h3>Emission</h3>`,
+      `<section class="detail-section"><h3>Série</h3>`,
       kv("Company", data.company),
       kv("Operation", data.operacao),
       kv("Debtor", data.devedor),
       kv("Securitization company", fonteLabel(data.fonte)),
       kv("Emission number", data.numero_emissao),
+      kv("Série number", data.numero_serie),
       kv("ISIN", data.isin),
-      kv("CETIP", data.codigos_cetip),
+      kv("CETIP", data.codigo_cetip),
       kv("Issue date", formatDate(data.data_emissao)),
       kv("Maturity", formatDate(data.data_vencimento)),
-      kv("Emission page", data.fonte === "opea" ? null : data.link, true),
+      kv("Interest", data.remuneracao),
+      kv("Indexer", data.indexador),
+      kv("Qty issued", data.quantidade),
+      kv("Volume", data.valor),
+      kv("Class", extras.classe),
+      kv("Concentration", extras.concentracao),
+      kv("Fiduciary agent", extras.agente_fiduciario),
+      kv("Segment", extras.segmento),
+      kv("Portal page", data.fonte === "opea" ? null : data.link, true),
       `</section>`,
-      `<section class="detail-section"><h3>Series (${(data.series || []).length})</h3>`,
-      renderSeries(data.series),
-      `</section>`,
+      renderSiblings(data.siblings),
       `<section class="detail-section"><h3>Documents (${(data.documentos || []).length})</h3>`,
       renderDocuments(data.documentos),
       `</section>`,
     ].join("");
+    els.sheetBody.querySelectorAll("[data-serie-id]").forEach((button) => {
+      button.addEventListener("click", () => openDetail(button.dataset.serieId));
+    });
   } catch (error) {
     els.sheetBody.innerHTML = `<p class="status">${escapeHtml(error.message)}</p>`;
   }
@@ -248,16 +243,16 @@ function closeSheet() {
 els.form.addEventListener("submit", (event) => {
   event.preventDefault();
   offset = 0;
-  loadEmissoes(false);
+  loadSeries(false);
 });
 
 els.reset.addEventListener("click", () => {
   els.form.reset();
   offset = 0;
-  loadEmissoes(false);
+  loadSeries(false);
 });
 
-els.more.addEventListener("click", () => loadEmissoes(true));
+els.more.addEventListener("click", () => loadSeries(true));
 
 els.sheet.addEventListener("click", (event) => {
   if (event.target.dataset.close) closeSheet();
@@ -269,4 +264,4 @@ document.addEventListener("keydown", (event) => {
 
 loadFilters()
   .catch(() => setStatus("Could not load filters."))
-  .finally(() => loadEmissoes(false));
+  .finally(() => loadSeries(false));

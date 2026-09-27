@@ -2,7 +2,8 @@
 
 The listing at /emissoes is server-rendered as a table of ``<tr class="emissao"
 data-id="...">`` rows with columns: ano, operação, emissão, série, cód. CETIP, valor.
-Pagination is via ``?page=N`` links.
+Pagination is via ``?page=N`` links. Each listing row expands into one or more
+``SerieData`` rows (series-first).
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from shared.parsing import (
     parse_brl_amount,
     parse_int,
 )
-from shared.records import DocumentoData, EmissaoData
+from shared.records import DocumentoData, SerieData
 
 FONTE = "ecoagro"
 _PAGE_RE = re.compile(r"[?&]page=(\d+)")
@@ -53,9 +54,10 @@ def find_max_page(html: str) -> int:
     return max_page
 
 
-def parse_listing_rows(html: str, base_url: str, detail_template: str) -> list[EmissaoData]:
+def parse_listing_rows(html: str, base_url: str, detail_template: str) -> list[SerieData]:
+    """Parse listing rows into per-série records (requires CETIP and/or later ISIN)."""
     soup = soupify(html)
-    emissoes: list[EmissaoData] = []
+    series: list[SerieData] = []
     for row in soup.select("tr.emissao[data-id]"):
         data_id = clean_text(row.get("data-id"))
         if not data_id:
@@ -63,25 +65,71 @@ def parse_listing_rows(html: str, base_url: str, detail_template: str) -> list[E
         cells = row.find_all("td")
         numero_raw = _cell_text(cells, 2)  # e.g. "457ª"
         numero = re.sub(r"[^0-9]", "", numero_raw or "") or None
+        series_raw = _cell_text(cells, 3)
         cetip_codes = (
             extract_cetip_codes(cells[4].get_text(" ")) if len(cells) > 4 else []
         )
-        emissoes.append(
-            EmissaoData(
-                fonte=FONTE,
-                id_origem=data_id,
-                link=detail_template.format(id=data_id),
+        common = {
+            "fonte": FONTE,
+            "emissao_id": data_id,
+            "link": detail_template.format(id=data_id),
+            "numero_emissao": numero,
+            "operacao": _cell_text(cells, 1),
+            "ano_emissao": parse_int(_cell_text(cells, 0)),
+            "tipo_ativo": "CRA",
+            "series_raw": series_raw,
+            "valor_total": parse_brl_amount(_cell_text(cells, 5)),
+            "extras": {"numero_emissao_raw": numero_raw} if numero_raw else {},
+        }
+        series.extend(
+            build_series_from_listing(
+                data_id=data_id,
                 numero_emissao=numero,
-                operacao=_cell_text(cells, 1),
-                ano_emissao=parse_int(_cell_text(cells, 0)),
-                tipo_ativo="CRA",
-                series_raw=_cell_text(cells, 3),
-                codigos_cetip=" ".join(cetip_codes) or None,
-                valor_total=parse_brl_amount(_cell_text(cells, 5)),
-                extras={"numero_emissao_raw": numero_raw} if numero_raw else {},
+                series_raw=series_raw,
+                cetip_codes=cetip_codes,
+                common=common,
             )
         )
-    return emissoes
+    return series
+
+
+def build_series_from_listing(
+    *,
+    data_id: str,
+    numero_emissao: str | None,
+    series_raw: str | None,
+    cetip_codes: list[str],
+    common: dict,
+) -> list[SerieData]:
+    """Expand one listing emission into séries that already have CETIP keys."""
+    numeros = [n for n in _SERIE_SPLIT_RE.split(series_raw or "") if n]
+    count = max(len(numeros), len(cetip_codes))
+    if count == 0:
+        return []
+
+    out: list[SerieData] = []
+    for index in range(count):
+        numero_serie = numeros[index] if index < len(numeros) else str(index + 1)
+        codigo_cetip = cetip_codes[index] if index < len(cetip_codes) else None
+        if not codigo_cetip:
+            # Skip keyless séries at list time; detail may rediscover them with ISIN.
+            continue
+        id_origem = f"{data_id}:{codigo_cetip}"
+        fields = {k: v for k, v in common.items() if k != "extras"}
+        fields.update(
+            {
+                "id_origem": id_origem,
+                "numero_serie": numero_serie,
+                "numero_emissao": numero_emissao,
+                "codigo_cetip": codigo_cetip,
+                "extras": {
+                    **(common.get("extras") or {}),
+                    "listing_data_id": data_id,
+                },
+            }
+        )
+        out.append(SerieData(**fields))
+    return out
 
 
 def parse_detail(html: str, base_url: str) -> tuple[dict, list[DocumentoData]]:
@@ -113,7 +161,6 @@ def parse_detail(html: str, base_url: str) -> tuple[dict, list[DocumentoData]]:
             )
         )
 
-    # Fallback: leftover file links inside the documents section only (not site footer).
     section = soup.select_one("section.documents") or soup.select_one(".documents")
     if section is not None:
         for titulo, url in extract_document_links(section, base_url):
@@ -175,11 +222,8 @@ def _extract_labelled_fields(soup) -> dict:
     return extras
 
 
-
-def parse_series_from_detail(html: str) -> list:
+def parse_series_from_detail(html: str, *, emissao_id: str | None = None) -> list[SerieData]:
     """Extract per-série ISIN/CETIP/remuneration from inline JavaScript on the detail page."""
-    from shared.records import SerieData
-
     series: list[SerieData] = []
     seen: set[tuple[str, str | None]] = set()
     for match in _SERIE_JS_BLOCK_RE.finditer(html):
@@ -189,12 +233,22 @@ def parse_series_from_detail(html: str) -> list:
         isin = clean_text(match.group("isin")) or None
         cetip = clean_text(match.group("cetip")) or None
         remuneracao = clean_text(match.group("remuneracao")) or None
+        if not (isin or cetip):
+            continue
         key = (numero, cetip)
         if key in seen:
             continue
         seen.add(key)
+        id_origem = (
+            f"{emissao_id}:{cetip or isin}"
+            if emissao_id
+            else (cetip or isin or numero)
+        )
         series.append(
             SerieData(
+                fonte=FONTE,
+                id_origem=id_origem,
+                emissao_id=emissao_id,
                 numero_serie=numero,
                 isin=isin,
                 codigo_cetip=cetip,
@@ -204,10 +258,8 @@ def parse_series_from_detail(html: str) -> list:
     return series
 
 
-def merge_series_from_detail(baseline: list, detail: list) -> list:
+def merge_series_from_detail(baseline: list[SerieData], detail: list[SerieData]) -> list[SerieData]:
     """Overlay detail-page fields onto list-derived séries."""
-    from shared.records import SerieData
-
     if not detail:
         return baseline
 
@@ -221,12 +273,22 @@ def merge_series_from_detail(baseline: list, detail: list) -> list:
             extra = by_cetip.get(base.codigo_cetip)
         merged.append(
             SerieData(
+                fonte=base.fonte or FONTE,
+                id_origem=base.id_origem,
+                emissao_id=base.emissao_id,
+                link=base.link,
                 numero_serie=base.numero_serie,
                 numero_emissao=base.numero_emissao,
                 codigo_cetip=(extra.codigo_cetip if extra else None) or base.codigo_cetip,
                 isin=(extra.isin if extra else None) or base.isin,
                 remuneracao=(extra.remuneracao if extra else None) or base.remuneracao,
                 indexador=(extra.indexador if extra else None) or base.indexador,
+                operacao=base.operacao,
+                devedor=base.devedor,
+                ano_emissao=base.ano_emissao,
+                tipo_ativo=base.tipo_ativo,
+                series_raw=base.series_raw,
+                valor_total=base.valor_total,
                 valor=base.valor,
                 data_emissao=base.data_emissao,
                 data_vencimento=base.data_vencimento,
@@ -253,16 +315,11 @@ def emission_isin_from_series(series: list) -> str | None:
             isins.append(serie.isin)
     return isins[0] if len(isins) == 1 else None
 
+
 def build_series_from_emissao(
     numero_emissao: str | None, series_raw: str | None, codigos_cetip: str | None
-):
-    """Derive per-série rows from the list-level série numbers + CETIP codes.
-
-    Ecoagro shows séries as "1-2-3" and their CETIP codes side by side, so we can
-    populate the ``series`` table even if the detail page is unavailable.
-    """
-    from shared.records import SerieData
-
+) -> list[SerieData]:
+    """Derive per-série rows from list-level série numbers + CETIP codes (tests/helpers)."""
     numeros = [n for n in _SERIE_SPLIT_RE.split(series_raw or "") if n]
     cetips = (codigos_cetip or "").split()
     series: list[SerieData] = []
@@ -270,8 +327,12 @@ def build_series_from_emissao(
     for index in range(count):
         numero_serie = numeros[index] if index < len(numeros) else str(index + 1)
         codigo_cetip = cetips[index] if index < len(cetips) else None
+        if not codigo_cetip:
+            continue
         series.append(
             SerieData(
+                fonte=FONTE,
+                id_origem=codigo_cetip,
                 numero_serie=numero_serie,
                 numero_emissao=numero_emissao,
                 codigo_cetip=codigo_cetip,

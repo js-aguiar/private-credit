@@ -1,4 +1,4 @@
-"""Delete all scraper table rows (documentos, series, emissoes)."""
+"""Delete all scraper table rows (documentos_series, documentos, series)."""
 
 from __future__ import annotations
 
@@ -17,23 +17,23 @@ logger = get_logger(__name__)
 
 @dataclass
 class TruncateSummary:
-    emissoes: int
     series: int
     documentos: int
+    documentos_series: int = 0
 
 
 @dataclass
 class DeleteFonteSummary:
     fonte: str
-    emissoes: int
     series: int
     documentos: int
+    documentos_series: int = 0
 
 
 def delete_fonte_rows(
     fonte: str, config: ScraperConfig | None = None
 ) -> DeleteFonteSummary:
-    """Delete all rows for one ``fonte`` (series/docs cascade from emissoes)."""
+    """Delete all rows for one ``fonte`` (docs/junction cascade from series deletes)."""
     cfg = config or ScraperConfig.from_env("admin")
     engine = get_engine(cfg)
     fonte = (fonte or "").strip().lower()
@@ -43,12 +43,6 @@ def delete_fonte_rows(
     with engine.begin() as conn:
         conn.execute(text("SET LOCAL lock_timeout = '60s'"))
         before = {
-            "emissoes": int(
-                conn.execute(
-                    text("SELECT COUNT(*) FROM emissoes WHERE fonte = :fonte"),
-                    {"fonte": fonte},
-                ).scalar_one()
-            ),
             "series": int(
                 conn.execute(
                     text("SELECT COUNT(*) FROM series WHERE fonte = :fonte"),
@@ -61,28 +55,42 @@ def delete_fonte_rows(
                     {"fonte": fonte},
                 ).scalar_one()
             ),
+            "documentos_series": int(
+                conn.execute(
+                    text(
+                        """
+                        SELECT COUNT(*) FROM documentos_series ds
+                        JOIN series s ON s.serie_id = ds.serie_id
+                        WHERE s.fonte = :fonte
+                        """
+                    ),
+                    {"fonte": fonte},
+                ).scalar_one()
+            ),
         }
-        conn.execute(text("DELETE FROM emissoes WHERE fonte = :fonte"), {"fonte": fonte})
+        # Delete documents for this fonte (junction rows cascade).
+        conn.execute(text("DELETE FROM documentos WHERE fonte = :fonte"), {"fonte": fonte})
+        conn.execute(text("DELETE FROM series WHERE fonte = :fonte"), {"fonte": fonte})
 
     summary = DeleteFonteSummary(fonte=fonte, **before)
     logger.info(
         "delete_fonte_done",
         extra={
             "fonte": fonte,
-            "emissoes_removed": summary.emissoes,
             "series_removed": summary.series,
             "documentos_removed": summary.documentos,
+            "documentos_series_removed": summary.documentos_series,
         },
     )
     return summary
 
 
 def truncate_all_tables(config: ScraperConfig | None = None) -> TruncateSummary:
-    """Remove every row from the three core tables and reset identity sequences."""
+    """Remove every row from the core tables and reset identity sequences."""
     cfg = config or ScraperConfig.from_env("admin")
     engine = get_engine(cfg)
 
-    before = {"emissoes": 0, "series": 0, "documentos": 0}
+    before = {"series": 0, "documentos": 0, "documentos_series": 0}
     last_error: Exception | None = None
 
     for attempt in range(1, 6):
@@ -90,20 +98,22 @@ def truncate_all_tables(config: ScraperConfig | None = None) -> TruncateSummary:
             with engine.begin() as conn:
                 conn.execute(text("SET LOCAL lock_timeout = '30s'"))
                 before = {
-                    "emissoes": int(
-                        conn.execute(text("SELECT COUNT(*) FROM emissoes")).scalar_one()
-                    ),
                     "series": int(
                         conn.execute(text("SELECT COUNT(*) FROM series")).scalar_one()
                     ),
                     "documentos": int(
                         conn.execute(text("SELECT COUNT(*) FROM documentos")).scalar_one()
                     ),
+                    "documentos_series": int(
+                        conn.execute(
+                            text("SELECT COUNT(*) FROM documentos_series")
+                        ).scalar_one()
+                    ),
                 }
-                # FK ON DELETE CASCADE clears series + documentos with the parents.
-                conn.execute(text("DELETE FROM emissoes"))
+                conn.execute(text("DELETE FROM documentos_series"))
+                conn.execute(text("DELETE FROM documentos"))
+                conn.execute(text("DELETE FROM series"))
                 conn.execute(text("DELETE FROM isin_contestados"))
-                conn.execute(text("ALTER SEQUENCE IF EXISTS emissoes_emissao_id_seq RESTART WITH 1"))
                 conn.execute(text("ALTER SEQUENCE IF EXISTS series_serie_id_seq RESTART WITH 1"))
                 conn.execute(
                     text("ALTER SEQUENCE IF EXISTS documentos_documento_id_seq RESTART WITH 1")
@@ -125,9 +135,9 @@ def truncate_all_tables(config: ScraperConfig | None = None) -> TruncateSummary:
     logger.info(
         "truncate_all_done",
         extra={
-            "emissoes_removed": summary.emissoes,
             "series_removed": summary.series,
             "documentos_removed": summary.documentos,
+            "documentos_series_removed": summary.documentos_series,
         },
     )
     return summary
