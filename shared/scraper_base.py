@@ -12,6 +12,7 @@ links, marking re-check timestamps, and error isolation.
 
 from __future__ import annotations
 
+import os
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Iterable
@@ -146,10 +147,18 @@ class BaseScraper(ABC):
     def _process_details(self, summary: dict) -> None:
         """Visit séries needing detail/re-check until the time budget runs out."""
         with session_scope(self.config) as session:
+            # Full EC2 backfill drains never-detailed rows only; Lambdas also re-check.
+            include_recheck = os.getenv("EXECUTION_MODE", "").strip().lower() != "ec2_backfill"
             pending = select_series_para_detalhe(
-                session, self.source_name, limit=self.config.detail_batch_limit
+                session,
+                self.source_name,
+                limit=self.config.detail_batch_limit,
+                include_recheck=include_recheck,
             )
-            self.logger.info("detail_queue", extra={"pendentes": len(pending)})
+            self.logger.info(
+                "detail_queue",
+                extra={"pendentes": len(pending), "include_recheck": include_recheck},
+            )
 
             for serie in pending:
                 if not self.budget.has_time():

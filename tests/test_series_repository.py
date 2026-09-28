@@ -17,7 +17,12 @@ from shared.config import ScraperConfig
 from shared.db import ensure_schema, session_scope
 from shared.models import Documento, DocumentoSerie, Serie
 from shared.records import DocumentoData, SerieData
-from shared.repository import link_documento_series, upsert_documento, upsert_serie
+from shared.repository import (
+    apply_serie_detail,
+    link_documento_series,
+    upsert_documento,
+    upsert_serie,
+)
 
 
 def _pg_available() -> bool:
@@ -198,7 +203,37 @@ def test_unique_cetip_conflict_skips(session, fonte):
     assert second.serie_id is None
 
 
+def test_apply_serie_detail_skips_conflicting_cetip(session, fonte):
+    cetip = f"C{uuid.uuid4().hex[:8].upper()}"
+    owner = upsert_serie(
+        session,
+        _serie(fonte, id_origem="owner", codigo_cetip=cetip, isin=f"BR{uuid.uuid4().hex[:9].upper()}"),
+    )
+    victim = upsert_serie(
+        session,
+        _serie(
+            fonte,
+            id_origem="victim",
+            codigo_cetip=f"C{uuid.uuid4().hex[:8].upper()}",
+            isin=f"BR{uuid.uuid4().hex[:9].upper()}",
+        ),
+    )
+    session.flush()
+    apply_serie_detail(
+        session,
+        victim.serie_id,
+        {"codigo_cetip": cetip, "remuneracao": "CDI+1%"},
+    )
+    session.flush()
+    row = session.get(Serie, victim.serie_id)
+    assert row.detalhes_coletados is True
+    assert row.codigo_cetip != cetip  # conflict dropped; original kept
+    assert row.remuneracao == "CDI+1%"
+    assert session.get(Serie, owner.serie_id).codigo_cetip == cetip
+
+
 def test_document_m2m_links_multiple_series(session, fonte):
+
     s1 = upsert_serie(
         session,
         _serie(

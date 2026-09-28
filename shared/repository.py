@@ -289,13 +289,54 @@ def upsert_serie(session: Session, data: SerieData) -> UpsertSerieResult:
 
 
 def apply_serie_detail(session: Session, serie_id: int, updates: dict) -> None:
-    """Apply detail-page fields and mark the série as detailed/re-checked now."""
+    """Apply detail-page fields and mark the série as detailed/re-checked now.
+
+    Conflicting ``isin`` / ``codigo_cetip`` values (already owned by another série)
+    are dropped from the update so the row can still be marked detailed — otherwise
+    a UniqueViolation rolls back the whole detail transaction and the série stays
+    pending forever (EC2 backfill loop).
+    """
     extras = updates.get("extras")
     payload = {k: v for k, v in updates.items() if k != "extras"}
     if "isin" in payload:
-        payload["isin"] = sanitize_isin(session, payload.get("isin"))
+        isin = sanitize_isin(session, payload.get("isin"))
+        if isin:
+            owner = _find_serie_by_isin(session, isin)
+            if owner is not None and owner.serie_id != serie_id:
+                mark_isin_contested(session, isin, fonte=owner.fonte)
+                logger.warning(
+                    "detail_isin_conflict_skipped",
+                    extra={
+                        "serie_id": serie_id,
+                        "isin": isin,
+                        "owner_serie_id": owner.serie_id,
+                        "owner_id_origem": owner.id_origem,
+                    },
+                )
+                del payload["isin"]
+            else:
+                payload["isin"] = isin
+        else:
+            payload["isin"] = None
     if "codigo_cetip" in payload:
-        payload["codigo_cetip"] = _normalize_key(payload.get("codigo_cetip"))
+        cetip = _normalize_key(payload.get("codigo_cetip"))
+        if cetip:
+            owner = _find_serie_by_cetip(session, cetip)
+            if owner is not None and owner.serie_id != serie_id:
+                logger.warning(
+                    "detail_cetip_conflict_skipped",
+                    extra={
+                        "serie_id": serie_id,
+                        "codigo_cetip": cetip,
+                        "owner_serie_id": owner.serie_id,
+                        "owner_id_origem": owner.id_origem,
+                    },
+                )
+                del payload["codigo_cetip"]
+            else:
+                payload["codigo_cetip"] = cetip
+        else:
+            payload["codigo_cetip"] = None
     payload["detalhes_coletados"] = True
     payload["ultima_verificacao"] = _now()
     payload["atualizado_em"] = _now()
@@ -435,18 +476,26 @@ def resolve_serie_ids_by_emissao_id(
     )
 
 
-def select_series_para_detalhe(session: Session, fonte: str, limit: int) -> list[Serie]:
-    """Return séries to visit, prioritizing never-detailed ones, then oldest re-checks."""
-    stmt = (
-        select(Serie)
-        .where(Serie.fonte == fonte)
-        .order_by(
-            Serie.detalhes_coletados.asc(),
-            Serie.ultima_verificacao.asc().nullsfirst(),
-            Serie.serie_id.asc(),
-        )
-        .limit(limit)
-    )
+def select_series_para_detalhe(
+    session: Session,
+    fonte: str,
+    limit: int,
+    *,
+    include_recheck: bool = True,
+) -> list[Serie]:
+    """Return séries to visit, prioritizing never-detailed ones, then oldest re-checks.
+
+    When ``include_recheck`` is False (EC2 full backfill), only rows with
+    ``detalhes_coletados=false`` are returned so a source drains before the next.
+    """
+    stmt = select(Serie).where(Serie.fonte == fonte)
+    if not include_recheck:
+        stmt = stmt.where(Serie.detalhes_coletados.is_(False))
+    stmt = stmt.order_by(
+        Serie.detalhes_coletados.asc(),
+        Serie.ultima_verificacao.asc().nullsfirst(),
+        Serie.serie_id.asc(),
+    ).limit(limit)
     return list(session.execute(stmt).scalars().all())
 
 

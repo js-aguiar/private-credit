@@ -138,6 +138,8 @@ def main() -> int:
 
     sources = _resolve_sources(args.sources)
     run_id = os.getenv("RUN_ID") or str(uuid.uuid4())
+    os.environ["EXECUTION_MODE"] = "ec2_backfill"
+    os.environ.setdefault("RUN_ID", run_id)
     configure_logging()
     bind_run_context(execution_mode="ec2_backfill", run_id=run_id)
     logger = get_logger("run_backfill_all")
