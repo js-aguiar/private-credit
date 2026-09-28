@@ -100,75 +100,86 @@ def list_documents(
     limit: int = DEFAULT_LIMIT,
     offset: int = 0,
 ) -> dict:
+    """List documents newest-first (by ``data_documento``, then ``documento_id``).
+
+    Joins to séries are for company filter/display only. Pagination orders by
+    document date in SQL — not by ``documento_id`` — so the first page is not
+    stuck on sparse early rows.
+    """
     limit = min(max(limit, 1), MAX_LIMIT)
     offset = max(offset, 0)
 
     company = _company_expr()
-    # One row per document; pick an arbitrary linked série for company display.
-    base = (
-        select(Documento, company.label("company"))
-        .outerjoin(DocumentoSerie, DocumentoSerie.documento_id == Documento.documento_id)
-        .outerjoin(Serie, Serie.serie_id == DocumentoSerie.serie_id)
-        .distinct(Documento.documento_id)
-    )
-    base = _apply_document_filters(
-        base,
-        fonte=fonte,
-        devedor=devedor,
-        tipo_documento=tipo_documento,
-        date_from=date_from,
-        date_to=date_to,
-    )
 
-    total = session.scalar(
-        select(func.count()).select_from(
+    def _filtered_doc_ids():
+        stmt = (
             select(Documento.documento_id)
             .outerjoin(
                 DocumentoSerie, DocumentoSerie.documento_id == Documento.documento_id
             )
             .outerjoin(Serie, Serie.serie_id == DocumentoSerie.serie_id)
-            .where(
-                *([Documento.fonte == fonte] if fonte else []),
-                *([company == devedor] if devedor else []),
-                *([Documento.tipo_documento == tipo_documento] if tipo_documento else []),
-                *([Documento.data_documento >= date_from] if date_from else []),
-                *([Documento.data_documento <= date_to] if date_to else []),
-            )
-            .distinct()
-            .subquery()
         )
+        return _apply_document_filters(
+            stmt,
+            fonte=fonte,
+            devedor=devedor,
+            tipo_documento=tipo_documento,
+            date_from=date_from,
+            date_to=date_to,
+        ).group_by(Documento.documento_id)
+
+    total = session.scalar(
+        select(func.count()).select_from(_filtered_doc_ids().subquery())
     ) or 0
 
-    rows = session.execute(
-        base.order_by(
-            Documento.documento_id,
-            Documento.data_documento.desc().nulls_last(),
-        )
-        .limit(limit)
-        .offset(offset)
-    ).all()
+    page_ids = list(
+        session.scalars(
+            _filtered_doc_ids()
+            .order_by(
+                func.max(Documento.data_documento).desc().nulls_last(),
+                Documento.documento_id.desc(),
+            )
+            .limit(limit)
+            .offset(offset)
+        ).all()
+    )
+    if not page_ids:
+        return {
+            "items": [],
+            "total": int(total),
+            "limit": limit,
+            "offset": offset,
+            "has_more": False,
+        }
 
-    # Re-sort in Python for date order (DISTINCT ON requires leading order key).
-    items = sorted(
-        [
+    docs = {
+        doc.documento_id: doc
+        for doc in session.scalars(
+            select(Documento).where(Documento.documento_id.in_(page_ids))
+        ).all()
+    }
+    company_by_doc = dict(
+        session.execute(
+            select(DocumentoSerie.documento_id, func.min(company))
+            .join(Serie, Serie.serie_id == DocumentoSerie.serie_id)
+            .where(DocumentoSerie.documento_id.in_(page_ids))
+            .group_by(DocumentoSerie.documento_id)
+        ).all()
+    )
+
+    items = []
+    for documento_id in page_ids:
+        documento = docs.get(documento_id)
+        if documento is None:
+            continue
+        items.append(
             {
                 "id": documento.documento_id,
-                "company": company_value,
+                "company": company_by_doc.get(documento_id),
                 "date": _as_iso(documento.data_documento),
                 "document_type": documento.tipo_documento,
-                "_sort_date": documento.data_documento,
             }
-            for documento, company_value in rows
-        ],
-        key=lambda item: (
-            item["_sort_date"] is not None,
-            item["_sort_date"] or date.min,
-            item["id"],
-        ),
-        reverse=True,
-    )
-    for item in items:
-        item.pop("_sort_date", None)
+        )
 
     return {
         "items": items,
