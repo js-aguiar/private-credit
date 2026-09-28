@@ -68,11 +68,56 @@ def _now() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
+# Site placeholders that must not occupy UNIQUE(isin) / UNIQUE(codigo_cetip).
+_PLACEHOLDER_KEYS = frozenset(
+    {
+        "-",
+        ".",
+        "..",
+        "n/a",
+        "n.a",
+        "n.a.",
+        "na",
+        "none",
+        "null",
+        "nil",
+        "undefined",
+        "sem isin",
+        "sem cetip",
+        "nao informado",
+        "não informado",
+        "s/n",
+        "sn",
+        "mudar",  # Vert placeholder seen in list API
+        "tbd",
+        "todo",
+    }
+)
+
+
+def _is_placeholder_key(value: str) -> bool:
+    """True for empty-ish, literal placeholders, or all-zero business keys."""
+    lowered = value.casefold().strip()
+    if not lowered or lowered in _PLACEHOLDER_KEYS:
+        return True
+    # Digits-only zeros (e.g. 0000000000) or ticker+zeros (CRA0000000, BR0000000000).
+    alnum = "".join(ch for ch in lowered if ch.isalnum())
+    if not alnum:
+        return True
+    digits = "".join(ch for ch in alnum if ch.isdigit())
+    letters = "".join(ch for ch in alnum if ch.isalpha())
+    if digits and set(digits) == {"0"} and (not letters or letters in {"br", "cra", "cri", "cdca", "deb"}):
+        return True
+    return False
+
+
 def _normalize_key(value: str | None) -> str | None:
     if value is None:
         return None
     cleaned = str(value).strip()
-    return cleaned or None
+    if not cleaned or _is_placeholder_key(cleaned):
+        return None
+    return cleaned
 
 
 def _normalize_isin(value: str | None) -> str | None:

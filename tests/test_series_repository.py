@@ -89,6 +89,37 @@ def test_skip_when_both_keys_missing(session, fonte):
     )
 
 
+@pytest.mark.parametrize(
+    "isin,cetip",
+    [
+        ("N/A", None),
+        (".", "0000000000"),
+        ("CRA0000000", "NA"),
+        ("BR0000000000", "-"),
+        ("null", "none"),
+    ],
+)
+def test_placeholder_keys_treated_as_missing(session, fonte, isin, cetip):
+    result = upsert_serie(
+        session,
+        _serie(fonte, isin=isin, codigo_cetip=cetip, id_origem=f"ph-{uuid.uuid4().hex[:6]}"),
+    )
+    assert result.status == "skipped_no_keys"
+    assert result.serie_id is None
+
+
+def test_placeholder_isin_with_real_cetip_stores_null_isin(session, fonte):
+    cetip = f"C{uuid.uuid4().hex[:8].upper()}"
+    result = upsert_serie(
+        session,
+        _serie(fonte, isin="N/A", codigo_cetip=cetip, id_origem="ph-isin"),
+    )
+    assert result.status == "inserted"
+    row = session.get(Serie, result.serie_id)
+    assert row.isin is None
+    assert row.codigo_cetip == cetip
+
+
 def test_happy_path_isin_only(session, fonte):
     isin = f"BR{uuid.uuid4().hex[:9].upper()}"
     result = upsert_serie(
