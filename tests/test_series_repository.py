@@ -18,6 +18,7 @@ from shared.db import ensure_schema, session_scope
 from shared.models import Documento, DocumentoSerie, Serie
 from shared.records import DocumentoData, SerieData
 from shared.repository import (
+    _normalize_isin,
     apply_serie_detail,
     link_documento_series,
     upsert_documento,
@@ -203,7 +204,36 @@ def test_unique_cetip_conflict_skips(session, fonte):
     assert second.serie_id is None
 
 
+def test_normalize_isin_splits_concatenated_duplicates():
+    assert _normalize_isin("BRECOACRA4F9 BRECOACRA4F9") == "BRECOACRA4F9"
+    assert _normalize_isin("  BRECOACRA4F9  ") == "BRECOACRA4F9"
+
+
+def test_apply_serie_detail_accepts_split_isin(session, fonte):
+    result = upsert_serie(
+        session,
+        _serie(
+            fonte,
+            id_origem="split-isin",
+            isin=f"BR{uuid.uuid4().hex[:9].upper()}",
+            codigo_cetip=f"C{uuid.uuid4().hex[:8].upper()}",
+        ),
+    )
+    session.flush()
+    apply_serie_detail(
+        session,
+        result.serie_id,
+        {"isin": "BRECOACRA4F9 BRECOACRA4F9", "codigo_cetip": "CRA019006SW"},
+    )
+    session.flush()
+    row = session.get(Serie, result.serie_id)
+    assert row.detalhes_coletados is True
+    assert row.isin == "BRECOACRA4F9"
+    assert row.codigo_cetip == "CRA019006SW"
+
+
 def test_apply_serie_detail_skips_conflicting_cetip(session, fonte):
+
     cetip = f"C{uuid.uuid4().hex[:8].upper()}"
     owner = upsert_serie(
         session,

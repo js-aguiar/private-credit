@@ -120,8 +120,30 @@ def _normalize_key(value: str | None) -> str | None:
     return cleaned
 
 
+def _normalize_cetip(value: str | None) -> str | None:
+    """Normalize CETIP; reject values that cannot fit ``series.codigo_cetip``."""
+    cleaned = _normalize_key(value)
+    if cleaned is None:
+        return None
+    if len(cleaned) > 30:
+        return None
+    return cleaned
+
+
 def _normalize_isin(value: str | None) -> str | None:
-    return _normalize_key(value)
+    """Normalize ISIN; take first token when sites concatenate duplicates with spaces."""
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    # e.g. "BRECOACRA4F9 BRECOACRA4F9" from ecoagro detail markup.
+    token = cleaned.split()[0].strip()
+    if not token or _is_placeholder_key(token):
+        return None
+    if len(token) > 20:
+        return None
+    return token
 
 
 def is_isin_contested(session: Session, isin: str | None) -> bool:
@@ -183,7 +205,7 @@ def _serie_values(data: SerieData) -> dict:
         "id_origem": data.id_origem,
         "link": data.link,
         "isin": _normalize_isin(data.isin),
-        "codigo_cetip": _normalize_key(data.codigo_cetip),
+        "codigo_cetip": _normalize_cetip(data.codigo_cetip),
         "emissao_id": _normalize_key(data.emissao_id),
         "numero_emissao": data.numero_emissao,
         "numero_serie": data.numero_serie or "",
@@ -211,7 +233,7 @@ def upsert_serie(session: Session, data: SerieData) -> UpsertSerieResult:
     ``codigo_cetip`` must not be stolen from another série.
     """
     isin = _normalize_isin(data.isin)
-    cetip = _normalize_key(data.codigo_cetip)
+    cetip = _normalize_cetip(data.codigo_cetip)
 
     if not isin and not cetip:
         logger.warning(
@@ -319,7 +341,7 @@ def apply_serie_detail(session: Session, serie_id: int, updates: dict) -> None:
         else:
             payload["isin"] = None
     if "codigo_cetip" in payload:
-        cetip = _normalize_key(payload.get("codigo_cetip"))
+        cetip = _normalize_cetip(payload.get("codigo_cetip"))
         if cetip:
             owner = _find_serie_by_cetip(session, cetip)
             if owner is not None and owner.serie_id != serie_id:
@@ -380,7 +402,7 @@ def _prepare_documento_values(
         "emissao_id": _normalize_key(data.emissao_id),
         "isin": sanitize_isin(session, data.isin),
         "numero_emissao": data.numero_emissao,
-        "codigo_cetip": _normalize_key(data.codigo_cetip),
+        "codigo_cetip": _normalize_cetip(data.codigo_cetip),
         "titulo": data.titulo,
         "tipo_documento": data.tipo_documento,
         "link_documento": link,
