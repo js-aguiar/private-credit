@@ -180,12 +180,40 @@ function handler(event) {
             ],
         )
 
+        # HTML must revalidate so browsers never keep a stale shell against newer JS
+        # (e.g. id="emissao-list" HTML + id="serie-list" app.js → null.replaceChildren).
         s3deploy.BucketDeployment(
             self,
-            "CatalogUiDeploy",
+            "CatalogHtmlDeploy",
+            destination_bucket=bucket,
+            distribution=distribution,
+            distribution_paths=["/", "/index.html", "/documentos.html"],
+            cache_control=[
+                s3deploy.CacheControl.max_age(Duration.seconds(0)),
+                s3deploy.CacheControl.must_revalidate(),
+            ],
+            prune=False,
+            sources=[
+                s3deploy.Source.data(
+                    "index.html",
+                    (WEB_DIR / "index.html").read_text(encoding="utf-8"),
+                ),
+                s3deploy.Source.data(
+                    "documentos.html",
+                    (WEB_DIR / "documentos.html").read_text(encoding="utf-8"),
+                ),
+            ],
+        )
+        s3deploy.BucketDeployment(
+            self,
+            "CatalogAssetsDeploy",
             destination_bucket=bucket,
             distribution=distribution,
             distribution_paths=["/*"],
+            cache_control=[
+                s3deploy.CacheControl.max_age(Duration.days(7)),
+            ],
+            prune=False,
             sources=[
                 s3deploy.Source.asset(
                     str(WEB_DIR),
@@ -196,6 +224,7 @@ function handler(event) {
                         "**/Dockerfile",
                         "**/requirements.txt",
                         "**/__pycache__/**",
+                        "*.html",
                     ],
                 )
             ],
