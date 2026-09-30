@@ -5,9 +5,11 @@ Layout (2 AZs):
   - private (egress): host the scraper Lambdas (reach the internet via the NAT instance)
   - isolated subnets: host RDS (no internet route)
 
-A single NAT *instance* (t4g.nano) is used instead of a managed NAT Gateway to minimize
-cost. Swap in ``ec2.Vpc(..., nat_gateways=1)`` (default provider) if you prefer the
-managed option.
+A single NAT *instance* (t4g.small) is used instead of a managed NAT Gateway to minimize
+cost. ``t4g.nano`` OOMs while installing ``iptables-services`` on Amazon Linux 2023,
+leaving masquerade unset and breaking private-subnet egress (catalog API / scrapers).
+Swap in ``ec2.Vpc(..., nat_gateways=1)`` (default provider) if you prefer the managed
+option.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ class NetworkStack(Stack):
 
         nat_provider = ec2.NatProvider.instance_v2(
             instance_type=ec2.InstanceType.of(
-                ec2.InstanceClass.BURSTABLE4_GRAVITON, ec2.InstanceSize.NANO
+                ec2.InstanceClass.BURSTABLE4_GRAVITON, ec2.InstanceSize.SMALL
             ),
         )
 
