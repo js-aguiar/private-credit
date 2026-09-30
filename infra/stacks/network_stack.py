@@ -23,9 +23,14 @@ class NetworkStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
+        # Explicit machine image forces CloudFormation replacement when size alone
+        # would only stop/start the broken nano (iptables never installed).
         nat_provider = ec2.NatProvider.instance_v2(
             instance_type=ec2.InstanceType.of(
                 ec2.InstanceClass.BURSTABLE4_GRAVITON, ec2.InstanceSize.SMALL
+            ),
+            machine_image=ec2.MachineImage.latest_amazon_linux2023(
+                cpu_type=ec2.AmazonLinuxCpuType.ARM_64,
             ),
         )
 
