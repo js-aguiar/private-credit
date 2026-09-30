@@ -2,13 +2,9 @@
 -- Series-first model: series is the primary entity (emissoes dropped).
 -- Business keys: UNIQUE(isin) and UNIQUE(codigo_cetip) when present (NULLs allowed).
 -- Documents attach to many series via documentos_series.
--- Breaking schema reset (local/dev and re-backfill). Existing data must be re-scraped.
+-- Idempotent: safe for ensure_schema on every EC2/Lambda start (no DROP / data wipe).
+-- Intentional wipes use scripts/truncate_db.py.
 -- Do not put semicolons in comments: ensure_schema splits on semicolon.
-DROP TABLE IF EXISTS documentos_series CASCADE;
-DROP TABLE IF EXISTS documentos CASCADE;
-DROP TABLE IF EXISTS series CASCADE;
-DROP TABLE IF EXISTS emissoes CASCADE;
-DROP TABLE IF EXISTS isin_contestados CASCADE;
 
 CREATE TABLE IF NOT EXISTS series (
     serie_id                    BIGSERIAL PRIMARY KEY,
