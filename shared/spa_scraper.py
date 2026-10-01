@@ -1,6 +1,6 @@
 """Base class for SPA (JavaScript single-page-app) sources.
 
-Implements the hybrid strategy shared by opea/riza/vert:
+Implements the hybrid strategy shared by API-first scrapers:
 
 1. API-first: if an API URL template is configured (constant or via env var), page
    through it with the polite HTTP client.
@@ -8,7 +8,7 @@ Implements the hybrid strategy shared by opea/riza/vert:
    capture the JSON the SPA fetches for itself off the network.
 
 Subclasses provide the site specifics: listing/detail URLs, API templates, pagination
-parameter names, and the field mapping (``map_emissao`` is required).
+parameter names, and the field mapping (``map_serie`` is required).
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Any
 
 from .mapping import as_records, find_document_dicts, pick
 from .parsing import parse_br_date, parse_brl_amount
-from .records import DetailResult, DocumentoData, EmissaoData, SerieData
+from .records import DetailResult, DocumentoData, SerieData
 from .scraper_base import BaseScraper
 
 
@@ -52,15 +52,15 @@ class SpaScraper(BaseScraper):
 
     # -- required mapping hook ----------------------------------------------------
     @abstractmethod
-    def map_emissao(self, record: dict) -> EmissaoData | None:
-        """Map one listing record (dict) into an EmissaoData (or None to skip)."""
+    def map_serie(self, record: dict) -> SerieData | list[SerieData] | None:
+        """Map one listing record into SerieData (or a list), or None to skip."""
 
     # -- optional mapping hooks ---------------------------------------------------
-    def map_series(self, detail_payload: Any, emissao) -> list[SerieData]:
+    def map_series(self, detail_payload: Any, serie: Any) -> list[SerieData]:
         """Override to extract per-série rows from a detail payload."""
         return []
 
-    def build_documento(self, doc: dict, emissao) -> DocumentoData | None:
+    def build_documento(self, doc: dict, serie) -> DocumentoData | None:
         url = pick(doc, "url", "link", "arquivo", "href", "path", "downloadUrl", "urlArquivo")
         if not url:
             return None
@@ -71,26 +71,34 @@ class SpaScraper(BaseScraper):
             data_documento=parse_br_date(
                 pick(doc, "data", "date", "dataDocumento", "dataPublicacao", "dtDocumento")
             ),
-            numero_emissao=emissao.numero_emissao,
+            numero_emissao=getattr(serie, "numero_emissao", None),
+            emissao_id=getattr(serie, "emissao_id", None),
+            serie_id_origens=[serie.id_origem] if getattr(serie, "id_origem", None) else [],
             extras=doc,
         )
 
-    def map_detail(self, emissao, detail_payload: Any) -> DetailResult:
+    def map_detail(self, serie, detail_payload: Any) -> DetailResult:
         documentos: list[DocumentoData] = []
         for doc in find_document_dicts(detail_payload):
-            built = self.build_documento(doc, emissao)
+            built = self.build_documento(doc, serie)
             if built:
                 documentos.append(built)
-        series = self.map_series(detail_payload, emissao)
+        series = self.map_series(detail_payload, serie)
         updates = {"extras": {"detalhe_fonte": "api_or_browser"}}
-        return DetailResult(emissao_updates=updates, series=series, documentos=documentos)
+        return DetailResult(serie_updates=updates, series=series, documentos=documentos)
 
     # -- orchestration: listing ---------------------------------------------------
-    def list_emissoes(self):
+    def list_series(self):
         for record in self._collect_list_records():
-            data = self.map_emissao(record)
-            if data is not None:
-                yield data
+            mapped = self.map_serie(record)
+            if mapped is None:
+                continue
+            if isinstance(mapped, list):
+                for item in mapped:
+                    if item is not None:
+                        yield item
+            else:
+                yield mapped
 
     def _collect_list_records(self) -> list[dict]:
         if self.api_list_url_template:
@@ -138,34 +146,34 @@ class SpaScraper(BaseScraper):
         return best
 
     # -- orchestration: detail ----------------------------------------------------
-    def fetch_detail(self, emissao) -> DetailResult:
-        payload = self._collect_detail_payload(emissao)
+    def fetch_detail(self, serie) -> DetailResult:
+        payload = self._collect_detail_payload(serie)
         if payload is None:
-            # Nothing retrieved this run; keep it resumable but don't crash.
-            return DetailResult(emissao_updates={"extras": {"detalhe_acessivel": False}})
-        return self.map_detail(emissao, payload)
+            return DetailResult(serie_updates={"extras": {"detalhe_acessivel": False}})
+        return self.map_detail(serie, payload)
 
-    def _collect_detail_payload(self, emissao) -> Any:
+    def _collect_detail_payload(self, serie) -> Any:
+        detail_id = serie.emissao_id or serie.id_origem
         if self.api_detail_url_template:
             try:
-                url = self.api_detail_url_template.format(id=emissao.id_origem)
+                url = self.api_detail_url_template.format(id=detail_id)
                 return self.client.get_json(url)
             except Exception as exc:
                 self.logger.warning(
                     "api_detail_failed",
-                    extra={"id_origem": emissao.id_origem, "error": str(exc)},
+                    extra={"id_origem": serie.id_origem, "error": str(exc)},
                 )
-        if self.config.use_browser_fallback and emissao.link:
+        if self.config.use_browser_fallback and serie.link:
             try:
                 from .browser import BrowserFetcher
 
                 with BrowserFetcher(self.config) as browser:
-                    payloads = browser.capture_json(emissao.link, self.json_marker)
+                    payloads = browser.capture_json(serie.link, self.json_marker)
                 return payloads
             except Exception as exc:
                 self.logger.warning(
                     "browser_detail_failed",
-                    extra={"id_origem": emissao.id_origem, "error": str(exc)},
+                    extra={"id_origem": serie.id_origem, "error": str(exc)},
                 )
         return None
 

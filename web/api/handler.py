@@ -14,11 +14,11 @@ from urllib.parse import parse_qs
 from queries import (
     DEFAULT_LIMIT,
     get_document,
-    get_emissao,
+    get_serie,
     list_documents,
-    list_emissoes,
-    list_emissoes_filters,
     list_filters,
+    list_series,
+    list_series_filters,
     resolve_document_open_url,
 )
 
@@ -30,6 +30,10 @@ _DOC_OPEN = re.compile(r"^/api/documents/(\d+)/open/?$")
 _DOC_DETAIL = re.compile(r"^/api/documents/(\d+)/?$")
 _DOC_LIST = re.compile(r"^/api/documents/?$")
 _FILTERS = re.compile(r"^/api/filters/?$")
+_SERIE_FILTERS = re.compile(r"^/api/series/filters/?$")
+_SERIE_DETAIL = re.compile(r"^/api/series/(\d+)/?$")
+_SERIE_LIST = re.compile(r"^/api/series/?$")
+# Legacy emission routes redirect to series endpoints.
 _EMISSAO_FILTERS = re.compile(r"^/api/emissoes/filters/?$")
 _EMISSAO_DETAIL = re.compile(r"^/api/emissoes/(\d+)/?$")
 _EMISSAO_LIST = re.compile(r"^/api/emissoes/?$")
@@ -59,20 +63,20 @@ def handler(event, context):
         if _FILTERS.match(path):
             with session_scope(config) as session:
                 return _response(200, list_filters(session))
-        if _EMISSAO_FILTERS.match(path):
+        if _SERIE_FILTERS.match(path) or _EMISSAO_FILTERS.match(path):
             with session_scope(config) as session:
-                return _response(200, list_emissoes_filters(session))
-        emissao_detail = _EMISSAO_DETAIL.match(path)
-        if emissao_detail:
+                return _response(200, list_series_filters(session))
+        serie_detail = _SERIE_DETAIL.match(path) or _EMISSAO_DETAIL.match(path)
+        if serie_detail:
             with session_scope(config) as session:
-                payload = get_emissao(session, int(emissao_detail.group(1)))
+                payload = get_serie(session, int(serie_detail.group(1)))
             if payload is None:
                 return _response(404, {"error": "not_found"})
             return _response(200, payload)
-        if _EMISSAO_LIST.match(path):
-            params = _emissao_list_params(query)
+        if _SERIE_LIST.match(path) or _EMISSAO_LIST.match(path):
+            params = _serie_list_params(query)
             with session_scope(config) as session:
-                return _response(200, list_emissoes(session, **params))
+                return _response(200, list_series(session, **params))
         open_match = _DOC_OPEN.match(path)
         if open_match:
             with session_scope(config) as session:
@@ -106,7 +110,6 @@ def _parse_event(event: dict) -> tuple[str, str, dict[str, str]]:
     method = (http.get("method") or event.get("httpMethod") or "GET").upper()
     path = event.get("rawPath") or event.get("path") or "/"
     if not path.startswith("/api"):
-        # Allow local.py and stripped proxy paths.
         path = "/api" + (path if path.startswith("/") else f"/{path}")
     query = event.get("queryStringParameters")
     if query is None and event.get("rawQueryString"):
@@ -126,7 +129,7 @@ def _list_params(query: dict[str, str]) -> dict:
     }
 
 
-def _emissao_list_params(query: dict[str, str]) -> dict:
+def _serie_list_params(query: dict[str, str]) -> dict:
     return {
         "fonte": _opt_str(query.get("fonte")),
         "company": _opt_str(query.get("company") or query.get("devedor")),

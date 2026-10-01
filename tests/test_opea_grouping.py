@@ -14,12 +14,12 @@ sys.path.insert(0, str(ROOT))
 from scrapers.opea.scraper import (
     document_matches_emission,
     emission_file_code,
-    group_list_items,
     natureza_from_parent,
     normalize_serie_number,
     parent_codigo_opea,
     parse_remuneracao,
     serie_from_detail,
+    serie_from_list_item,
     vehicle_from_parent,
 )
 
@@ -66,52 +66,39 @@ def test_document_filter_rejects_foreign_prefixes_and_pls_op():
     assert not document_matches_emission(gs, "CRA", "E0032", "PLS")
     assert document_matches_emission(gcii, "DEB", "E0002", "GCII")
     assert not document_matches_emission(gcii, "DEB", "E0002", "CIA")
-    # PLS never owns the default OP_ book when colliding with CIA.
     assert not document_matches_emission(op_cra, "CRA", "E0032", "PLS")
     assert document_matches_emission(op_cra, "CRA", "E0032", "CIA")
     assert document_matches_emission("TRU_CRA_E0032_S001_TS.pdf", "CRA", "E0032", "TRU")
     assert not document_matches_emission("TRU_CRA_E0032_S001_TS.pdf", "CRA", "E0032", "CIA")
 
 
-def test_group_list_items_collapses_series():
-    items = [
-        {
-            "codigoOpea": "CRI.624.CIA.1",
-            "emissao": 624,
-            "serie": 1,
-            "isin": "BRRBRACIR4R9",
-            "codigoIf": "26H1942318",
-            "nomeDevedor": "LOG PRIME II",
-            "naturezaOperacao": "Corporativo",
-        },
-        {
-            "codigoOpea": "CRI.624.CIA.2",
-            "emissao": 624,
-            "serie": 2,
-            "isin": "BRRBRACIR4S7",
-            "codigoIf": "26H1943930",
-            "nomeDevedor": "LOG PRIME II",
-            "naturezaOperacao": "Corporativo",
-        },
-        {
-            "codigoOpea": "CRA.228.CIA.1",
-            "emissao": 228,
-            "serie": 1,
-            "isin": "BRRBRACRA934",
-            "codigoIf": "CRA026005V5",
-            "nomeDevedor": "BOTUVERÁ",
-            "naturezaOperacao": "Corporativo",
-        },
-    ]
-    grouped = group_list_items(items)
-    by_id = {row.id_origem: row for row in grouped}
-    assert set(by_id) == {"CRI.624.CIA", "CRA.228.CIA"}
-    log = by_id["CRI.624.CIA"]
-    assert log.numero_emissao == "624"
-    assert log.devedor == "LOG PRIME II"
-    assert log.extras["series_codigos"] == ["CRI.624.CIA.1", "CRI.624.CIA.2"]
-    assert log.isin is None  # multi-ISIN emission
-    assert "26H1942318" in (log.codigos_cetip or "")
+def test_serie_from_list_item_maps_keys_and_parent():
+    item = {
+        "codigoOpea": "CRI.624.CIA.1",
+        "emissao": 624,
+        "serie": 1,
+        "isin": "BRRBRACIR4R9",
+        "codigoIf": "26H1942318",
+        "nomeDevedor": "LOG PRIME II",
+        "naturezaOperacao": "Corporativo",
+    }
+    serie = serie_from_list_item(item)
+    assert serie is not None
+    assert serie.id_origem == "CRI.624.CIA.1"
+    assert serie.emissao_id == "CRI.624.CIA"
+    assert serie.isin == "BRRBRACIR4R9"
+    assert serie.codigo_cetip == "26H1942318"
+    assert serie.numero_emissao == "624"
+    assert serie.devedor == "LOG PRIME II"
+
+
+def test_serie_from_list_item_skips_without_keys():
+    assert (
+        serie_from_list_item(
+            {"codigoOpea": "CRI.1.CIA.1", "emissao": 1, "serie": 1}
+        )
+        is None
+    )
 
 
 def test_serie_from_detail_maps_string_remuneracao():
@@ -137,6 +124,9 @@ def test_serie_from_detail_maps_string_remuneracao():
     }
     serie = serie_from_detail("CRI.624.CIA.1", detail, "624")
     assert serie is not None
+    assert serie.fonte == "opea"
+    assert serie.id_origem == "CRI.624.CIA.1"
+    assert serie.emissao_id == "CRI.624.CIA"
     assert serie.numero_serie == "1"
     assert serie.remuneracao == "CDI + 1,3000% a.a."
     assert serie.quantidade == 119000

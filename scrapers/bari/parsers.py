@@ -10,7 +10,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from shared.parsing import parse_br_date, parse_int
-from shared.records import DocumentoData, EmissaoData, SerieData
+from shared.records import DocumentoData, SerieData
 
 STRAPI_EMISSIONS_URL = "https://strapicms.bancobari.com.br/api/emissions"
 PORTAL_BASE = "https://barisec.com.br"
@@ -99,30 +99,37 @@ def _normalize_isin(value: Any) -> str | None:
     return text
 
 
-def map_list_item(row: dict, *, fonte: str) -> EmissaoData | None:
-    """Map one Strapi series row to an emission record (id_origem = IF B3 code)."""
+def map_list_item(row: dict, *, fonte: str) -> SerieData | None:
+    """Map one Strapi series row (1 row = 1 série; id_origem = IF B3 code)."""
     code = str(row.get("code") or "").strip()
     if not code:
         return None
 
     emission_number = row.get("emissionNumber")
     isin = _normalize_isin(row.get("ISIN"))
+    # Defense in depth: skip when both business keys are missing.
+    if not isin and not code:
+        return None
 
-    return EmissaoData(
+    return SerieData(
         fonte=fonte,
         id_origem=code,
+        emissao_id=str(emission_number) if emission_number is not None else None,
         link=DETAIL_URL_TEMPLATE.format(code=code),
         isin=isin,
+        codigo_cetip=code,
         numero_emissao=str(emission_number) if emission_number is not None else None,
-        codigos_cetip=code,
+        numero_serie=str(row.get("serieNumber")) if row.get("serieNumber") is not None else "",
         operacao=f"CRI {emission_number}ª" if emission_number is not None else None,
         devedor=(row.get("ballastNature") or "").strip() or None,
         tipo_ativo="CRI",
-        series_raw=str(row.get("serieNumber")) if row.get("serieNumber") is not None else None,
+        valor=_parse_decimal(row.get("emissionValue")),
         valor_total=_parse_decimal(row.get("emissionValue")),
+        remuneracao=(row.get("remuneration") or "").strip() or None,
         indexador=(row.get("remuneration") or "").strip() or None,
         data_emissao=parse_bari_date(row.get("emissionDate")),
         data_vencimento=parse_bari_date(row.get("dueDate")),
+        quantidade=parse_int(str(row.get("amount") or "").replace(".", "")),
         extras={
             "series_row": row,
             "emissionStatus": row.get("emissionStatus"),
@@ -132,56 +139,9 @@ def map_list_item(row: dict, *, fonte: str) -> EmissaoData | None:
             "tradingEnvironment": row.get("tradingEnvironment"),
             "strapi_emission_number": emission_number,
             "serie_number": row.get("serieNumber"),
-        },
-    )
-
-
-def map_grouped_emission(
-    emission_number: int,
-    series_rows: list[dict],
-    *,
-    fonte: str,
-) -> EmissaoData | None:
-    if not series_rows:
-        return None
-
-    primary = series_rows[0]
-    primary_code = str(primary.get("code") or "").strip()
-    if not primary_code:
-        return None
-
-    codes = [str(row.get("code")).strip() for row in series_rows if row.get("code")]
-    series_numbers = [
-        str(row.get("serieNumber"))
-        for row in series_rows
-        if row.get("serieNumber") is not None
-    ]
-    isins = [_normalize_isin(row.get("ISIN")) for row in series_rows]
-    isins = [isin for isin in isins if isin]
-
-    return EmissaoData(
-        fonte=fonte,
-        id_origem=str(emission_number),
-        link=DETAIL_URL_TEMPLATE.format(code=primary_code),
-        isin=isins[0] if isins else None,
-        numero_emissao=str(emission_number),
-        codigos_cetip=" ".join(dict.fromkeys(codes)) or None,
-        operacao=f"CRI {emission_number}ª",
-        devedor=(primary.get("ballastNature") or "").strip() or None,
-        tipo_ativo="CRI",
-        series_raw="-".join(series_numbers) if series_numbers else None,
-        valor_total=_parse_decimal(primary.get("emissionValue")),
-        indexador=(primary.get("remuneration") or "").strip() or None,
-        data_emissao=parse_bari_date(primary.get("emissionDate")),
-        data_vencimento=parse_bari_date(primary.get("dueDate")),
-        extras={
-            "primary_code": primary_code,
-            "series_rows": series_rows,
-            "emissionStatus": primary.get("emissionStatus"),
-            "ballastNature": primary.get("ballastNature"),
-            "trustee": primary.get("trustee"),
-            "custodian": primary.get("custodian"),
-            "tradingEnvironment": primary.get("tradingEnvironment"),
+            "code": code,
+            "strapi_id": row.get("id"),
+            "amount": row.get("amount"),
         },
     )
 
@@ -201,53 +161,7 @@ def extract_page_props(html: str) -> dict:
     return page_props
 
 
-def map_series_from_rows(series_rows: list[dict], emissao) -> list[SerieData]:
-    series: list[SerieData] = []
-    seen: set[str] = set()
-    for row in series_rows:
-        if not isinstance(row, dict):
-            continue
-        numero = row.get("serieNumber")
-        if numero is None:
-            continue
-        numero_serie = str(numero)
-        if numero_serie in seen:
-            continue
-        seen.add(numero_serie)
-        code = (row.get("code") or "").strip() or None
-        series.append(
-            SerieData(
-                numero_serie=numero_serie,
-                isin=_normalize_isin(row.get("ISIN")),
-                numero_emissao=emissao.numero_emissao,
-                codigo_cetip=code,
-                valor=_parse_decimal(row.get("emissionValue")),
-                remuneracao=(row.get("remuneration") or "").strip() or None,
-                indexador=(row.get("remuneration") or "").strip() or None,
-                data_emissao=parse_bari_date(row.get("emissionDate")),
-                data_vencimento=parse_bari_date(row.get("dueDate")),
-                quantidade=parse_int(str(row.get("amount") or "").replace(".", "")),
-                extras={
-                    "code": code,
-                    "emissionStatus": row.get("emissionStatus"),
-                    "amount": row.get("amount"),
-                    "strapi_id": row.get("id"),
-                },
-            )
-        )
-    return series
-
-
-def _document_url(item: dict) -> str | None:
-    file_obj = item.get("file")
-    if isinstance(file_obj, dict):
-        url = (file_obj.get("url") or "").strip()
-        if url:
-            return url
-    return None
-
-
-def map_documents(page_props: dict, emissao) -> list[DocumentoData]:
+def map_documents(page_props: dict, serie) -> list[DocumentoData]:
     docs: list[DocumentoData] = []
     seen: set[str] = set()
 
@@ -269,11 +183,20 @@ def map_documents(page_props: dict, emissao) -> list[DocumentoData]:
                     titulo=item.get("documentName"),
                     tipo_documento=doc_type,
                     data_documento=parse_bari_date(item.get("date")),
-                    numero_emissao=emissao.numero_emissao,
-                    codigo_cetip=(emissao.codigos_cetip or "").split()[0]
-                    if emissao.codigos_cetip
-                    else None,
+                    numero_emissao=serie.numero_emissao,
+                    codigo_cetip=serie.codigo_cetip,
+                    emissao_id=serie.emissao_id,
+                    serie_id_origens=[serie.id_origem],
                     extras={**item, "source_array": key},
                 )
             )
     return docs
+
+
+def _document_url(item: dict) -> str | None:
+    file_obj = item.get("file")
+    if isinstance(file_obj, dict):
+        url = (file_obj.get("url") or "").strip()
+        if url:
+            return url
+    return None

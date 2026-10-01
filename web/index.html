@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Emissões</title>
+    <title>Séries</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -11,13 +11,13 @@
       <div class="brand">
         <span class="mark" aria-hidden="true"></span>
         <div>
-          <h1>Emissões</h1>
-          <p>Brazilian securitization emissions</p>
+          <h1>Séries</h1>
+          <p>Brazilian securitization series</p>
         </div>
       </div>
       <div class="topbar-aside">
         <nav class="site-nav" aria-label="Catalog sections">
-          <a class="active" href="/">Emissões</a>
+          <a class="active" href="/">Séries</a>
           <a href="/documentos">Documentos</a>
         </nav>
         <p class="count" id="result-count">Loading…</p>
@@ -55,10 +55,12 @@
         <div class="list-head list-head-emissoes">
           <span>Company</span>
           <span>Fonte</span>
-          <span>Número</span>
-          <span>ISIN / CETIP</span>
+          <span>ISIN</span>
+          <span>CETIP</span>
+          <span>Issue date</span>
+          <span>Maturity</span>
         </div>
-        <ul class="list" id="emissao-list"></ul>
+        <ul class="list" id="serie-list"></ul>
         <p class="status" id="status" hidden></p>
         <button type="button" class="load-more" id="load-more" hidden>Load more</button>
       </section>
@@ -68,7 +70,7 @@
       <div class="sheet-backdrop" data-close="true"></div>
       <aside class="sheet-panel sheet-panel-wide" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
         <header>
-          <h2 id="sheet-title">Emission</h2>
+          <h2 id="sheet-title">Série</h2>
           <button type="button" class="icon-close" data-close="true" aria-label="Close">×</button>
         </header>
         <div class="sheet-body" id="sheet-body"></div>

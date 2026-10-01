@@ -1,12 +1,13 @@
 # BR Securitization Scrapers
 
 Daily, incremental scrapers for five Brazilian securitization ("securitizadoras") websites.
-Each run **discovers new operations (emissions)** and **re-checks already-scraped
-operations for updated information** — especially newly published documents.
+Each run **discovers new séries** and **re-checks already-scraped séries for updated
+information** — especially newly published documents.
 
-Extracted data is stored in a single **Amazon RDS for PostgreSQL** database, in three
-tables whose names/columns are in Portuguese (matching the terminology used by the
-websites): `emissoes`, `series`, and `documentos`.
+Extracted data is stored in a single **Amazon RDS for PostgreSQL** database (Portuguese
+column names matching the sites): `series` (primary entity), `documentos`, and the
+`documentos_series` many-to-many junction. Rows require an `isin` and/or `codigo_cetip`
+(UNIQUE when present); keyless or conflicting rows are skipped with a warning.
 
 Infrastructure is defined with **AWS CDK (Python)**; each scraper runs as an **AWS
 Lambda container image**. After an initial local backfill, **EventBridge Scheduler**
@@ -40,17 +41,18 @@ br-securitization-scrapers/
 
 ## Data model
 
-`series.isin` (ISIN) is the natural business key that links the tables, but because an
-emission can have several séries (each with its own ISIN/CETIP code) the tables use
-stable surrogate keys internally and carry `isin`, `numero_emissao`, and `codigo_cetip`
-on every table for cross-linking. A `extras` JSONB column on each table stores any
-site-specific fields so richer sources never lose information.
+`series` is the primary scraped entity. Business uniqueness is `UNIQUE(isin)` and
+`UNIQUE(codigo_cetip)` (NULLs allowed). A stable surrogate `serie_id` is the PK;
+`(fonte, id_origem)` is the per-source upsert key. Source emission grouping is a
+denormalized string `emissao_id` (not an FK). Documents attach to one or more séries
+via `documentos_series`. A `extras` JSONB column stores site-specific fields.
 
-- `emissoes` — one row per operation/emission (list + detail fields, scrape metadata).
-- `series` — one row per série of an emission.
+- `series` — one row per série (ISIN/CETIP, emission context, scrape metadata).
 - `documentos` — one row per document (title, link, document date, insertion date, ...).
+- `documentos_series` — M2M links between documents and séries.
 
-See [`shared/schema.sql`](shared/schema.sql) for the authoritative DDL.
+See [`shared/schema.sql`](shared/schema.sql) for the authoritative DDL. Schema resets are
+destructive — re-run `python scripts/init_db.py` and re-backfill after upgrading.
 
 ## Local development
 
@@ -194,28 +196,31 @@ Manual invoke still works at any time:
 aws lambda invoke --function-name br-sec-scrapers-ecoagro /tmp/ecoagro.json
 ```
 
-## Document catalog
+## Document / series catalog
 
-The catalog lists rows from `documentos` joined to `emissoes`:
+Home (`/`) lists **séries** (`/api/series`). `/documentos` lists documents joined through
+`documentos_series` → `series`:
 
 | Filter / column | Database field |
 | --- | --- |
-| Company | `emissoes.devedor`, falling back to `emissoes.operacao` |
+| Company | `series.devedor`, falling back to `series.operacao` |
 | Date | `documentos.data_documento` |
-| Securitization company | `documentos.fonte` |
+| Securitization company | `documentos.fonte` / `series.fonte` |
 | Document type | `documentos.tipo_documento` |
+| CETIP / ISIN | `series.codigo_cetip` / `series.isin` |
 
-List rows show company, date, and document type. Clicking a row opens a detail sheet
-with the document URL and remaining fields. Local development uses
-`python web/api/local.py` (port 8081) plus `python -m http.server 8080 --directory web`.
+Local development uses `python web/api/local.py` (port 8081) plus
+`python -m http.server 8080 --directory web`.
 
 ## Incremental & re-check behavior
 
-- Discovery upserts the emission list; new operations start with `detalhes_coletados = false`.
-- Every run also re-opens existing operations (oldest `ultima_verificacao_detalhe` first)
-  and re-parses the full document list, so **new documents on old emissions are captured**.
-- All writes are idempotent upserts. Opea documents dedupe by stable cedoc file id
-  (`id_origem_arquivo` / `extras.id`); other sources dedupe by `(emissao_id, link_documento)`.
+- Discovery upserts séries that already have ISIN and/or CETIP; new rows start with
+  `detalhes_coletados = false`. Keyless or conflicting keys are skipped with a warning.
+- Every run also re-opens existing séries (oldest `ultima_verificacao` first) and
+  re-parses documents, so **new documents on old séries are captured**.
+- All writes are idempotent upserts. Documents dedupe by `(fonte, id_origem_arquivo)`
+  (when set) or `(fonte, link_documento)`, then attach to one or more séries via
+  `documentos_series`.
 - To remove existing Opea duplicates: `python3 scripts/dedupe_opea_documents.py` (or invoke
   the Opea Lambda with `{"action": "dedupe_opea_documents"}`).
 

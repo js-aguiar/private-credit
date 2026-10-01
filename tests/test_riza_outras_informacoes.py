@@ -63,11 +63,14 @@ def test_format_remuneracao():
 
 def test_extract_series_outras_informacoes():
     scraper = object.__new__(RizaScraper)
-    emissao = SimpleNamespace(numero_emissao="332")
-    series = scraper._extract_series(_DETAIL_SERIES, emissao)
+    serie_ctx = SimpleNamespace(numero_emissao="332", link=None, operacao=None)
+    series = scraper._extract_series(_DETAIL_SERIES, serie_ctx, "op-332")
 
     assert len(series) == 2
     senior = series[0]
+    assert senior.fonte == "riza"
+    assert senior.emissao_id == "op-332"
+    assert senior.id_origem == "op-332:26H3422746"
     assert senior.numero_serie == "1"
     assert senior.isin == "BRIMWLCRIQW3"
     assert senior.codigo_cetip == "26H3422746"
