@@ -7,10 +7,6 @@ API base: https://data.vert-capital.app
   List:      GET /api/emission-table?page={page}
              → {"registros": [...], "totalPaginas", "paginaAtual", ...}
   Documents: GET /api/documents-table/{emission_id}?category={name}&page={page}&page_size={size}
-             → {"registros": [{id, name, s3PublicUrl, referenceDate, category, ...}], ...}
-
-Document categories use Portuguese labels (e.g. ``Relatórios``), not enum codes.
-Pagination is 0-based for documents and 1-based for the emission table.
 """
 
 from __future__ import annotations
@@ -20,7 +16,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from shared.parsing import parse_br_date
-from shared.records import DetailResult, DocumentoData, EmissaoData, SerieData
+from shared.records import DetailResult, DocumentoData, SerieData
 from shared.scraper_base import BaseScraper
 
 _API_BASE = "https://data.vert-capital.app"
@@ -28,8 +24,8 @@ _LIST_URL = f"{_API_BASE}/api/emission-table"
 _DOCUMENTS_URL = f"{_API_BASE}/api/documents-table/{{emission_id}}"
 _PORTAL_BASE = f"{_API_BASE}/emissao"
 _DOCUMENT_PAGE_SIZE = 50
+FONTE = "vert"
 
-# Categories exposed on the documents tab (``Estoque`` is email-only — no API rows).
 _DOCUMENT_CATEGORIES = (
     "Relatórios",
     "Comunicados",
@@ -46,7 +42,7 @@ _DOCUMENT_CATEGORIES = (
 class VertScraper(BaseScraper):
     source_name = "vert"
 
-    def list_emissoes(self):
+    def list_series(self):
         page = 1
         while True:
             try:
@@ -59,9 +55,8 @@ class VertScraper(BaseScraper):
             total_pages = int(payload.get("totalPaginas") or 1)
 
             for item in items:
-                data = self._map_list_item(item)
-                if data is not None:
-                    yield data
+                for serie in self._map_list_item_to_series(item):
+                    yield serie
 
             self.logger.info(
                 "vert_list_page",
@@ -71,106 +66,104 @@ class VertScraper(BaseScraper):
                 break
             page += 1
 
-    def _map_list_item(self, record: dict) -> EmissaoData | None:
+    def _map_list_item_to_series(self, record: dict) -> list[SerieData]:
         emission_id = record.get("id")
         if emission_id is None:
-            return None
-        id_origem = str(emission_id).strip()
-        if not id_origem:
-            return None
-
-        series = record.get("series") or []
-        cetip_codes = [
-            str(s.get("codeCetip")).strip()
-            for s in series
-            if isinstance(s, dict) and s.get("codeCetip")
-        ]
-        isin_codes = [
-            str(s.get("codeIsin")).strip()
-            for s in series
-            if isinstance(s, dict) and s.get("codeIsin")
-        ]
-        series_numbers = [
-            _normalize_serie_numero(s.get("seriesNumber"))
-            for s in series
-            if isinstance(s, dict) and s.get("seriesNumber") is not None
-        ]
-        series_numbers = [n for n in series_numbers if n]
-
-        return EmissaoData(
-            fonte=self.source_name,
-            id_origem=id_origem,
-            link=f"{_PORTAL_BASE}/{id_origem}/referencia/default/documentos",
-            isin=isin_codes[0] if isin_codes else None,
-            numero_emissao=str(record.get("number")) if record.get("number") is not None else None,
-            codigos_cetip=" ".join(cetip_codes) or None,
-            operacao=record.get("name"),
-            devedor=record.get("originator"),
-            tipo_ativo=record.get("financialTitle"),
-            series_raw="-".join(series_numbers) if series_numbers else None,
-            valor_total=self._parse_decimal(record.get("volume")),
-            data_emissao=parse_br_date(str(record.get("date") or "")[:10]),
-            extras={
-                "external_id": record.get("external_id"),
-                "concentration": record.get("concentration"),
-                "series": series,
-                "lastReport": record.get("lastReport"),
-            },
-        )
-
-    def fetch_detail(self, emissao) -> DetailResult:
-        extras = emissao.extras or {}
-        series_source = extras.get("series") or []
-        series = self._extract_series(series_source, emissao)
-        documentos = self._fetch_documents(emissao.id_origem, emissao)
-        documentos = self._append_last_report(documentos, extras.get("lastReport"), emissao)
-
-        return DetailResult(
-            emissao_updates={
-                "extras": {
-                    "detalhe_acessivel": bool(series or documentos),
-                    "external_id": extras.get("external_id"),
-                    "lastReport": extras.get("lastReport"),
-                }
-            },
-            series=series,
-            documentos=documentos,
-        )
-
-    def _extract_series(self, series_payload: Any, emissao) -> list[SerieData]:
-        if not isinstance(series_payload, list):
+            return []
+        id_emissao = str(emission_id).strip()
+        if not id_emissao:
             return []
 
-        series: list[SerieData] = []
-        for item in series_payload:
+        numero_emissao = (
+            str(record.get("number")) if record.get("number") is not None else None
+        )
+        common = {
+            "fonte": FONTE,
+            "emissao_id": id_emissao,
+            "link": f"{_PORTAL_BASE}/{id_emissao}/referencia/default/documentos",
+            "numero_emissao": numero_emissao,
+            "operacao": record.get("name"),
+            "devedor": record.get("originator"),
+            "tipo_ativo": record.get("financialTitle"),
+            "valor_total": self._parse_decimal(record.get("volume")),
+            "data_emissao": parse_br_date(str(record.get("date") or "")[:10]),
+        }
+        extras_base = {
+            "external_id": record.get("external_id"),
+            "concentration": record.get("concentration"),
+            "lastReport": record.get("lastReport"),
+            "emission_id": id_emissao,
+        }
+
+        out: list[SerieData] = []
+        for item in record.get("series") or []:
             if not isinstance(item, dict):
                 continue
             numero = _normalize_serie_numero(item.get("seriesNumber"))
             if not numero:
                 continue
-            series.append(
+            isin = (item.get("codeIsin") or "").strip() or None
+            cetip = (item.get("codeCetip") or "").strip() or None
+            if not (isin or cetip):
+                continue
+            id_origem = f"{id_emissao}:{cetip or isin or numero}"
+            out.append(
                 SerieData(
+                    id_origem=id_origem,
                     numero_serie=numero,
-                    isin=(item.get("codeIsin") or "").strip() or None,
-                    numero_emissao=emissao.numero_emissao,
-                    codigo_cetip=(item.get("codeCetip") or "").strip() or None,
+                    isin=isin,
+                    codigo_cetip=cetip,
                     remuneracao=(
                         str(item.get("tax")).strip() if item.get("tax") is not None else None
                     ),
-                    indexador=(item.get("typeName") or item.get("taxType") or "").strip() or None,
+                    indexador=(item.get("typeName") or item.get("taxType") or "").strip()
+                    or None,
                     data_vencimento=parse_br_date(str(item.get("due_date") or "")[:10]),
                     extras={
+                        **extras_base,
                         "id": item.get("id"),
                         "name": item.get("name"),
                         "seriesClass": item.get("seriesClass"),
                         "financialTitle": item.get("financialTitle"),
                         "isClosed": item.get("isClosed"),
                     },
+                    **common,
                 )
             )
-        return series
+        return out
 
-    def _fetch_documents(self, emission_id: str, emissao) -> list[DocumentoData]:
+    def fetch_detail(self, serie) -> DetailResult:
+        emission_id = serie.emissao_id or serie.id_origem.split(":", 1)[0]
+        extras = serie.extras or {}
+        # Re-fetch siblings from list extras if present; otherwise just this série.
+        series_source = extras.get("series") if isinstance(extras, dict) else None
+        series: list[SerieData] = []
+        if isinstance(series_source, list):
+            # Rebuild from embedded list payload (legacy); usually empty in series-first.
+            pass
+
+        documentos = self._fetch_documents(emission_id, serie)
+        documentos = self._append_last_report(
+            documentos, extras.get("lastReport") if isinstance(extras, dict) else None, serie
+        )
+
+        return DetailResult(
+            serie_updates={
+                "extras": {
+                    "detalhe_acessivel": bool(documentos),
+                    "external_id": extras.get("external_id")
+                    if isinstance(extras, dict)
+                    else None,
+                    "lastReport": extras.get("lastReport")
+                    if isinstance(extras, dict)
+                    else None,
+                }
+            },
+            series=series,
+            documentos=documentos,
+        )
+
+    def _fetch_documents(self, emission_id: str, serie) -> list[DocumentoData]:
         docs: list[DocumentoData] = []
         seen: set[str] = set()
 
@@ -205,11 +198,9 @@ class VertScraper(BaseScraper):
                 total_pages = int(payload.get("totalPaginas") or 0)
 
                 for item in rows:
-                    doc = self._map_document(item, emissao)
+                    doc = self._map_document(item, serie, emission_id)
                     if doc is None:
                         continue
-                    # Prefer canonical URL for in-run dedupe: the same S3 object can appear
-                    # under multiple Vert document ids / categories.
                     link_key = doc.link_documento or ""
                     id_key = str((doc.extras or {}).get("vert_document_id") or "")
                     if (link_key and link_key in seen) or (id_key and id_key in seen):
@@ -226,7 +217,7 @@ class VertScraper(BaseScraper):
 
         return docs
 
-    def _map_document(self, item: dict, emissao) -> DocumentoData | None:
+    def _map_document(self, item: dict, serie, emission_id: str) -> DocumentoData | None:
         if item.get("isNeedInfoDownload"):
             return None
 
@@ -242,10 +233,9 @@ class VertScraper(BaseScraper):
             titulo=item.get("name"),
             tipo_documento=item.get("category"),
             data_documento=parse_br_date(str(item.get("referenceDate") or "")[:10]),
-            numero_emissao=emissao.numero_emissao,
-            codigo_cetip=(
-                (emissao.codigos_cetip or "").split()[0] if emissao.codigos_cetip else None
-            ),
+            numero_emissao=serie.numero_emissao,
+            codigo_cetip=serie.codigo_cetip,
+            emissao_id=emission_id,
             extras={**item, "vert_document_id": doc_id},
         )
 
@@ -253,7 +243,7 @@ class VertScraper(BaseScraper):
         self,
         documentos: list[DocumentoData],
         last_report: Any,
-        emissao,
+        serie,
     ) -> list[DocumentoData]:
         if not isinstance(last_report, dict):
             return documentos
@@ -265,7 +255,6 @@ class VertScraper(BaseScraper):
         if any(doc.link_documento == url for doc in documentos):
             return documentos
 
-        # lastReport often lacks a numeric document id; fall back to link-only dedupe.
         report_id = last_report.get("id")
         id_origem_arquivo = str(report_id).strip() if report_id is not None else None
 
@@ -276,10 +265,9 @@ class VertScraper(BaseScraper):
                 titulo=last_report.get("name"),
                 tipo_documento="Relatórios",
                 data_documento=parse_br_date(str(last_report.get("referenceDate") or "")[:10]),
-                numero_emissao=emissao.numero_emissao,
-                codigo_cetip=(emissao.codigos_cetip or "").split()[0]
-                if emissao.codigos_cetip
-                else None,
+                numero_emissao=serie.numero_emissao,
+                codigo_cetip=serie.codigo_cetip,
+                emissao_id=serie.emissao_id,
                 extras={**last_report, "vert_document_id": report_id},
             )
         )
@@ -306,7 +294,6 @@ class VertScraper(BaseScraper):
 
 
 def _normalize_serie_numero(value: Any) -> str:
-    """Normalize API série numbers like ``1.0`` → ``1``."""
     raw = str(value or "").strip()
     if not raw:
         return ""

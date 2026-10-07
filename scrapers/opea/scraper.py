@@ -7,14 +7,12 @@ API base: https://app.opea.com.br/bff/v1/api/
   List:   GET emissao/passivosoperacoes?pagina={page}&tamanhoPagina={size}
           → {"content": {"emissoes": {"lastPage": N, "totalCount": N, "items": [...]}}}
           Each list item is one **série**. Items that share a parent ``codigoOpea``
-          (everything except the trailing série segment) belong to the same emission.
+          (everything except the trailing série segment) belong to the same emission
+          grouping (stored as string ``emissao_id`` on each série).
   Detail: GET emissao/passivosoperacoes/detalhe?codigoOpea={serieCodigo}
           → {"content": {..., "idCedoc": "<guid>", ...}}
   Files:  GET cedoc/files?idCedoc={idCedoc}
           → {"children": [{name, url, categoryName, createdOn, ...}]}
-          Institution-wide list; filter by natureza + emission code + vehicle book
-          in the filename (e.g. CRA + E0228 + CIA → ``OP_CRA_E0228_…``;
-          CRI + E0228 + TRU → ``TRU_CRI_E0228_…``).
 """
 
 from __future__ import annotations
@@ -26,10 +24,11 @@ from typing import Any
 from shared.mapping import pick
 from shared.opea_documents import normalize_opea_document_url, opea_file_id
 from shared.parsing import parse_br_date
-from shared.records import DetailResult, DocumentoData, EmissaoData, SerieData
+from shared.records import DetailResult, DocumentoData, SerieData
 from shared.scraper_base import BaseScraper
 
 _BFF_BASE = "https://app.opea.com.br/bff/v1/api/"
+FONTE = "opea"
 
 
 def parent_codigo_opea(codigo_opea: str) -> str:
@@ -77,11 +76,7 @@ def _filename_has_natureza(name: str, nature: str) -> bool:
 
 
 def _leading_book_token(filename: str, nature: str) -> str | None:
-    """Leading book/vehicle token when present and not OP / natureza.
-
-    Examples: ``TRU_CRI_E0228_…`` → ``TRU``; ``GS_CRA_E0032_…`` → ``GS``;
-    ``OP_CRI_E0228_…`` → ``None``; ``CRI_E0228_…`` → ``None``.
-    """
+    """Leading book/vehicle token when present and not OP / natureza."""
     name = (filename or "").upper()
     if "_" not in name:
         return None
@@ -97,13 +92,7 @@ def document_matches_emission(
     emission_code: str | None,
     vehicle: str | None = None,
 ) -> bool:
-    """Keep files for this parent emission's natureza, E0NNN code, and vehicle book.
-
-    Cedoc is institution-wide: many parents share the same ``natureza`` + emission
-    number (e.g. ``CRI.228.CIA`` vs ``CRI.228.TRU``). Filenames use either the
-    default Opea book prefix ``OP_{NATURE}_`` (CIA) or a vehicle prefix
-    (``TRU_``, ``GS_``, ``GCII_``, ``SPE01_``, …).
-    """
+    """Keep files for this parent emission's natureza, E0NNN code, and vehicle book."""
     if not emission_code:
         return False
     name = (filename or "").upper()
@@ -120,7 +109,6 @@ def document_matches_emission(
     book = _leading_book_token(name, nature)
     if book:
         return bool(veh) and book == veh
-    # Default Opea book (OP_… / nature-first): only attach to CIA parents.
     return veh == "CIA"
 
 
@@ -188,7 +176,43 @@ def _enum_value(obj: Any) -> str | None:
     return str(obj).strip() or None
 
 
-def serie_from_detail(codigo_opea: str, detail: dict, numero_emissao: str | None) -> SerieData | None:
+def serie_from_list_item(record: dict) -> SerieData | None:
+    """Map one list-level série row. Requires ISIN and/or CETIP (codigoIf)."""
+    codigo = (record.get("codigoOpea") or "").strip()
+    if not codigo:
+        return None
+    isin = (record.get("isin") or "").strip() or None
+    cetip = (record.get("codigoIf") or "").strip() or None
+    if not (isin or cetip):
+        return None
+
+    parent = parent_codigo_opea(codigo)
+    numero = record.get("emissao")
+    return SerieData(
+        fonte=FONTE,
+        id_origem=codigo,
+        emissao_id=parent,
+        numero_serie=normalize_serie_number(record.get("serie")),
+        isin=isin,
+        codigo_cetip=cetip,
+        numero_emissao=str(numero) if numero is not None else None,
+        operacao=pick(record, "nomeDevedor", "apelidoOperacao"),
+        devedor=pick(record, "nomeDevedor"),
+        tipo_ativo=pick(record, "naturezaOperacao", "classe"),
+        indexador=pick(record, "indexador"),
+        data_vencimento=parse_br_date(str(record.get("dataVencimento") or "")[:10]),
+        rating=pick(record, "rating"),
+        extras={
+            "codigo_opea": codigo,
+            "natureza": natureza_from_parent(parent),
+            "vehicle": vehicle_from_parent(parent),
+        },
+    )
+
+
+def serie_from_detail(
+    codigo_opea: str, detail: dict, numero_emissao: str | None
+) -> SerieData | None:
     """Map one detail payload into a SerieData row."""
     if not detail:
         return None
@@ -197,9 +221,12 @@ def serie_from_detail(codigo_opea: str, detail: dict, numero_emissao: str | None
     if not (isin or cetip):
         return None
 
+    parent = parent_codigo_opea(codigo_opea)
     pagamento = detail.get("pagamentoPassivo") or {}
     extras = {
         "codigo_opea": codigo_opea,
+        "natureza": natureza_from_parent(parent),
+        "vehicle": vehicle_from_parent(parent),
         "classe": _enum_value(detail.get("classeOperacao")),
         "concentracao": _enum_value(detail.get("concentracao")),
         "periodicidade_juros": _enum_value(pagamento.get("periodicidadeFrequenciaJuros")),
@@ -211,86 +238,29 @@ def serie_from_detail(codigo_opea: str, detail: dict, numero_emissao: str | None
         "segmento": pick(detail, "descricaoSegmentoOperacao")
         or _enum_value(detail.get("descricaoSegmentoOperacao")),
         "precoUnitario": detail.get("precoUnitario"),
+        "idCedoc": detail.get("idCedoc"),
     }
-    # Drop empty extras keys.
     extras = {key: value for key, value in extras.items() if value not in (None, "")}
 
     return SerieData(
+        fonte=FONTE,
+        id_origem=codigo_opea,
+        emissao_id=parent,
         numero_serie=normalize_serie_number(detail.get("serie")),
         isin=isin,
+        codigo_cetip=cetip,
         numero_emissao=numero_emissao
         if numero_emissao is not None
         else (str(detail.get("emissao")) if detail.get("emissao") is not None else None),
-        codigo_cetip=cetip,
+        operacao=pick(detail, "apelidoOperacao")
+        or pick(detail.get("emissor") or {}, "descricao"),
         valor=parse_volume(detail),
         remuneracao=parse_remuneracao(detail.get("remuneracao")),
-        indexador=None,
         data_emissao=parse_br_date(str(detail.get("dataEmissaoSerie") or "")[:10]),
         data_vencimento=parse_br_date(str(detail.get("dataVencimentoSerie") or "")[:10]),
         quantidade=_safe_int(detail.get("quantidadeEmitida")),
         extras=extras,
     )
-
-
-def group_list_items(items: list[dict]) -> list[EmissaoData]:
-    """Collapse série-level list rows into one EmissaoData per parent codigoOpea."""
-    groups: dict[str, list[dict]] = defaultdict(list)
-    for record in items:
-        codigo = (record.get("codigoOpea") or "").strip()
-        if not codigo:
-            continue
-        groups[parent_codigo_opea(codigo)].append(record)
-
-    emissoes: list[EmissaoData] = []
-    for parent, members in sorted(groups.items()):
-        members_sorted = sorted(
-            members,
-            key=lambda row: (
-                float(row.get("serie") or 0),
-                str(row.get("codigoOpea") or ""),
-            ),
-        )
-        first = members_sorted[0]
-        numero = first.get("emissao")
-        cetips: list[str] = []
-        for row in members_sorted:
-            cetip = (row.get("codigoIf") or "").strip()
-            if cetip and cetip not in cetips:
-                cetips.append(cetip)
-        series_codigos = [str(row.get("codigoOpea")).strip() for row in members_sorted]
-        series_nums = [
-            normalize_serie_number(row.get("serie")) for row in members_sorted if row.get("serie") is not None
-        ]
-        isins = [
-            (row.get("isin") or "").strip()
-            for row in members_sorted
-            if (row.get("isin") or "").strip()
-        ]
-        unique_isins = list(dict.fromkeys(isins))
-        emissoes.append(
-            EmissaoData(
-                fonte="opea",
-                id_origem=parent,
-                # Opea portal pages are série-scoped; parent emission URLs are not public.
-                link=None,
-                isin=unique_isins[0] if len(unique_isins) == 1 else None,
-                numero_emissao=str(numero) if numero is not None else None,
-                codigos_cetip=" ".join(cetips) or None,
-                operacao=pick(first, "nomeDevedor", "apelidoOperacao"),
-                devedor=pick(first, "nomeDevedor"),
-                tipo_ativo=pick(first, "naturezaOperacao", "classe"),
-                series_raw="-".join(series_nums) if series_nums else None,
-                indexador=pick(first, "indexador"),
-                data_vencimento=parse_br_date(str(first.get("dataVencimento") or "")[:10]),
-                rating=pick(first, "rating"),
-                extras={
-                    "series_codigos": series_codigos,
-                    "natureza": natureza_from_parent(parent),
-                    "list_count": len(members_sorted),
-                },
-            )
-        )
-    return emissoes
 
 
 class OpeaScraper(BaseScraper):
@@ -301,7 +271,7 @@ class OpeaScraper(BaseScraper):
     _FILES_URL = f"{_BFF_BASE}cedoc/files"
     _PAGE_SIZE = 50
 
-    def list_emissoes(self):
+    def list_series(self):
         grouped: dict[str, list[dict]] = defaultdict(list)
         page = 1
         while True:
@@ -332,48 +302,45 @@ class OpeaScraper(BaseScraper):
                 break
             page += 1
 
-        flat = [row for members in grouped.values() for row in members]
-        yield from group_list_items(flat)
+        for parent, members in grouped.items():
+            codes = [
+                str(row.get("codigoOpea")).strip()
+                for row in members
+                if (row.get("codigoOpea") or "").strip()
+            ]
+            for item in members:
+                mapped = serie_from_list_item(item)
+                if mapped is None:
+                    continue
+                mapped.extras = {
+                    **(mapped.extras or {}),
+                    "series_codigos": codes,
+                    "natureza": natureza_from_parent(parent),
+                }
+                yield mapped
 
-    def fetch_detail(self, emissao) -> DetailResult:
-        series_codigos = self._series_codigos_for(emissao)
-        if not series_codigos:
+    def fetch_detail(self, serie) -> DetailResult:
+        codigo = serie.id_origem
+        detail = self._fetch_serie_detail(codigo)
+        if not detail:
             return DetailResult(
-                emissao_updates={"extras": {"detalhe_acessivel": False}},
+                serie_updates={"extras": {"detalhe_acessivel": False}},
                 series=[],
                 documentos=[],
             )
 
-        series: list[SerieData] = []
-        details: list[dict] = []
-        for codigo in series_codigos:
-            detail = self._fetch_serie_detail(codigo)
-            if not detail:
-                continue
-            details.append(detail)
-            mapped = serie_from_detail(codigo, detail, emissao.numero_emissao)
-            if mapped is not None:
-                series.append(mapped)
-
-        first_detail = details[0] if details else {}
-        updates = self._emission_updates(emissao, series, first_detail)
-        documentos = self._fetch_documents(emissao, first_detail)
+        mapped = serie_from_detail(codigo, detail, serie.numero_emissao)
+        series: list[SerieData] = [mapped] if mapped is not None else []
+        parent = serie.emissao_id or parent_codigo_opea(codigo)
+        updates = self._serie_updates(serie, detail, mapped)
+        # Docs attach to all séries sharing emissao_id (resolved in scraper_base).
+        documentos = self._fetch_documents(serie, detail, parent)
 
         return DetailResult(
-            emissao_updates=updates,
+            serie_updates=updates,
             series=series,
             documentos=documentos,
         )
-
-    def _series_codigos_for(self, emissao) -> list[str]:
-        extras = emissao.extras or {}
-        codes = extras.get("series_codigos") if isinstance(extras, dict) else None
-        if isinstance(codes, list) and codes:
-            return [str(code).strip() for code in codes if str(code).strip()]
-        # Fallback for legacy one-série id_origem rows.
-        if emissao.id_origem and emissao.id_origem.count(".") >= 3:
-            return [emissao.id_origem]
-        return []
 
     def _fetch_serie_detail(self, codigo_opea: str) -> dict:
         try:
@@ -386,52 +353,37 @@ class OpeaScraper(BaseScraper):
             )
             return {}
 
-    def _emission_updates(
-        self, emissao, series: list[SerieData], first_detail: dict
-    ) -> dict:
+    def _serie_updates(self, serie, detail: dict, mapped: SerieData | None) -> dict:
         updates: dict = {
             "extras": {
-                "detalhe_acessivel": bool(series),
-                "natureza": (emissao.extras or {}).get("natureza")
-                if isinstance(emissao.extras, dict)
-                else natureza_from_parent(emissao.id_origem),
-                "series_codigos": [
-                    (serie.extras or {}).get("codigo_opea")
-                    for serie in series
-                    if (serie.extras or {}).get("codigo_opea")
-                ],
+                "detalhe_acessivel": bool(detail),
+                "natureza": (serie.extras or {}).get("natureza")
+                if isinstance(serie.extras, dict)
+                else natureza_from_parent(serie.emissao_id or serie.id_origem),
+                "idCedoc": detail.get("idCedoc"),
+                "permissao_divulgacao": pick(
+                    detail.get("permissaoDivulgacaoPortal") or {}, "raw", "value"
+                ),
+                "oferta": pick(detail.get("tipoOferta") or {}, "raw", "value"),
+                "emissor": pick(detail.get("emissor") or {}, "descricao"),
+                "apelido_operacao": detail.get("apelidoOperacao"),
             }
         }
-        if not series and not first_detail:
-            return updates
-
-        cetips = [serie.codigo_cetip for serie in series if serie.codigo_cetip]
-        isins = [serie.isin for serie in series if serie.isin]
-        unique_isins = list(dict.fromkeys(isins))
-        issue_dates = [serie.data_emissao for serie in series if serie.data_emissao]
-        maturities = [serie.data_vencimento for serie in series if serie.data_vencimento]
-
-        updates.update(
-            {
-                "isin": unique_isins[0] if len(unique_isins) == 1 else None,
-                "codigos_cetip": " ".join(dict.fromkeys(cetips)) or emissao.codigos_cetip,
-                "data_emissao": min(issue_dates) if issue_dates else None,
-                "data_vencimento": max(maturities) if maturities else None,
-            }
-        )
-        if first_detail:
-            updates["extras"].update(
+        if mapped:
+            updates.update(
                 {
-                    "permissao_divulgacao": pick(
-                        first_detail.get("permissaoDivulgacaoPortal") or {}, "raw", "value"
-                    ),
-                    "oferta": pick(first_detail.get("tipoOferta") or {}, "raw", "value"),
-                    "emissor": pick(first_detail.get("emissor") or {}, "descricao"),
-                    "idCedoc": first_detail.get("idCedoc"),
-                    "apelido_operacao": first_detail.get("apelidoOperacao"),
+                    "isin": mapped.isin,
+                    "codigo_cetip": mapped.codigo_cetip,
+                    "numero_serie": mapped.numero_serie,
+                    "numero_emissao": mapped.numero_emissao or serie.numero_emissao,
+                    "valor": mapped.valor,
+                    "remuneracao": mapped.remuneracao,
+                    "data_emissao": mapped.data_emissao,
+                    "data_vencimento": mapped.data_vencimento,
+                    "quantidade": mapped.quantidade,
+                    "operacao": mapped.operacao or serie.operacao,
                 }
             )
-        # Drop empty extras.
         updates["extras"] = {
             key: value
             for key, value in updates["extras"].items()
@@ -439,17 +391,22 @@ class OpeaScraper(BaseScraper):
         }
         return updates
 
-    def _fetch_documents(self, emissao, detail: dict) -> list[DocumentoData]:
-        """Fetch documents once per emission; filter by natureza + E0NNN + vehicle."""
+    def _fetch_documents(
+        self,
+        serie,
+        detail: dict,
+        parent: str,
+    ) -> list[DocumentoData]:
+        """Fetch documents once; attach to all séries sharing ``emissao_id``."""
         id_cedoc = detail.get("idCedoc")
         if not id_cedoc:
             return []
-        emission_code = emission_file_code(emissao.numero_emissao)
+        emission_code = emission_file_code(serie.numero_emissao)
         natureza = None
-        if isinstance(emissao.extras, dict):
-            natureza = emissao.extras.get("natureza")
-        natureza = natureza or natureza_from_parent(emissao.id_origem)
-        vehicle = vehicle_from_parent(emissao.id_origem)
+        if isinstance(serie.extras, dict):
+            natureza = serie.extras.get("natureza")
+        natureza = natureza or natureza_from_parent(parent)
+        vehicle = vehicle_from_parent(parent)
         if not emission_code:
             return []
 
@@ -458,7 +415,7 @@ class OpeaScraper(BaseScraper):
         except Exception as exc:
             self.logger.warning(
                 "opea_cedoc_error",
-                extra={"id_origem": emissao.id_origem, "error": str(exc)},
+                extra={"id_origem": serie.id_origem, "error": str(exc)},
             )
             return []
 
@@ -483,12 +440,11 @@ class OpeaScraper(BaseScraper):
                     titulo=name,
                     tipo_documento=child.get("categoryName"),
                     data_documento=parse_br_date(str(child.get("createdOn") or "")[:10]),
-                    numero_emissao=emissao.numero_emissao,
-                    codigo_cetip=(emissao.codigos_cetip or "").split()[0]
-                    if emissao.codigos_cetip
-                    else None,
+                    numero_emissao=serie.numero_emissao,
+                    codigo_cetip=serie.codigo_cetip,
+                    emissao_id=parent,
                     id_origem_arquivo=file_id,
-                    extras=child,
+                    extras={**child, "idCedoc": id_cedoc},
                 )
             )
         return docs

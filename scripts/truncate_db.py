@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Truncate emissoes / series / documentos (all rows).
+"""Truncate series / documentos / documentos_series (all rows).
 
 Intended for local use or via Lambda:
   aws lambda invoke --function-name br-sec-scrapers-opea \\

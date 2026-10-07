@@ -7,7 +7,7 @@ from sqlalchemy import select
 from shared.db import session_scope
 from shared.lambda_invoke import log_invoke_start
 from shared.logging_config import configure_logging, get_logger
-from shared.models import Emissao
+from shared.models import Serie
 
 from .scraper import EcoagroScraper
 
@@ -33,15 +33,15 @@ def handler(event, context):
         }
         try:
             with session_scope(scraper.config) as session:
-                emissao = session.scalar(
-                    select(Emissao).where(
-                        Emissao.fonte == scraper.source_name,
-                        Emissao.id_origem == id_origem,
+                serie = session.scalar(
+                    select(Serie).where(
+                        Serie.fonte == scraper.source_name,
+                        Serie.id_origem == id_origem,
                     )
                 )
-                if emissao is None:
+                if serie is None:
                     return {"statusCode": 404, "error": "not_found", "id_origem": id_origem}
-                scraper._process_single_detail(session, emissao, summary)
+                scraper._process_single_detail(session, serie, summary)
         finally:
             scraper.close()
         logger.info("refetch_detail_done", extra=summary)

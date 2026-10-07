@@ -57,6 +57,7 @@ def handler(event, context):
         payload = {
             "action": summary.action,
             "emissoes": summary.emissoes,
+            "series": summary.series,
             "cedoc_children": summary.cedoc_children,
             "id_cedoc": summary.id_cedoc,
             "documentos_removidos": summary.documentos_removidos,
@@ -87,7 +88,7 @@ def handler(event, context):
         from sqlalchemy import delete, select
 
         from shared.db import session_scope
-        from shared.models import Documento, Emissao
+        from shared.models import Documento, DocumentoSerie, Serie
 
         ids = event.get("id_origem") or event.get("id_origens") or []
         if isinstance(ids, str):
@@ -113,23 +114,29 @@ def handler(event, context):
         try:
             with session_scope(scraper.config) as session:
                 for id_origem in ids:
-                    emissao = session.scalar(
-                        select(Emissao).where(
-                            Emissao.fonte == scraper.source_name,
-                            Emissao.id_origem == id_origem,
+                    serie = session.scalar(
+                        select(Serie).where(
+                            Serie.fonte == scraper.source_name,
+                            Serie.id_origem == id_origem,
                         )
                     )
-                    if emissao is None:
+                    if serie is None:
                         summary["not_found"].append(id_origem)
                         continue
                     if reset_documentos:
-                        result = session.execute(
-                            delete(Documento).where(
-                                Documento.emissao_id == emissao.emissao_id
+                        doc_ids = session.scalars(
+                            select(DocumentoSerie.documento_id).where(
+                                DocumentoSerie.serie_id == serie.serie_id
                             )
-                        )
-                        summary["documentos_removidos"] += int(result.rowcount or 0)
-                    scraper._process_single_detail(session, emissao, summary)
+                        ).all()
+                        if doc_ids:
+                            result = session.execute(
+                                delete(Documento).where(
+                                    Documento.documento_id.in_(list(doc_ids))
+                                )
+                            )
+                            summary["documentos_removidos"] += int(result.rowcount or 0)
+                    scraper._process_single_detail(session, serie, summary)
         finally:
             scraper.close()
         logger.info("refetch_detail_done", extra=summary)

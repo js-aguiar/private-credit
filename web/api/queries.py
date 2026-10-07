@@ -1,4 +1,4 @@
-"""Read-only queries for the document / emissions catalog API."""
+"""Read-only queries for the document / series catalog API."""
 
 from __future__ import annotations
 
@@ -6,17 +6,17 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from shared.models import Documento, Emissao, Serie
+from shared.models import Documento, DocumentoSerie, Serie
 
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
 
 
 def _company_expr():
-    return func.coalesce(Emissao.devedor, Emissao.operacao)
+    return func.coalesce(Serie.devedor, Serie.operacao)
 
 
 def _as_iso(value: date | datetime | None) -> str | None:
@@ -37,7 +37,7 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-def _apply_filters(
+def _apply_document_filters(
     stmt,
     *,
     fonte: str | None,
@@ -78,6 +78,8 @@ def list_filters(session: Session) -> dict:
         value
         for value in session.scalars(
             select(company)
+            .select_from(Serie)
+            .join(DocumentoSerie, DocumentoSerie.serie_id == Serie.serie_id)
             .where(company.is_not(None))
             .where(company != "")
             .distinct()
@@ -98,40 +100,87 @@ def list_documents(
     limit: int = DEFAULT_LIMIT,
     offset: int = 0,
 ) -> dict:
+    """List documents newest-first (by ``data_documento``, then ``documento_id``).
+
+    Joins to séries are for company filter/display only. Pagination orders by
+    document date in SQL — not by ``documento_id`` — so the first page is not
+    stuck on sparse early rows.
+    """
     limit = min(max(limit, 1), MAX_LIMIT)
     offset = max(offset, 0)
 
-    base = select(Documento, _company_expr()).join(
-        Emissao, Documento.emissao_id == Emissao.emissao_id
-    )
-    base = _apply_filters(
-        base,
-        fonte=fonte,
-        devedor=devedor,
-        tipo_documento=tipo_documento,
-        date_from=date_from,
-        date_to=date_to,
-    )
+    company = _company_expr()
 
-    total = session.scalar(select(func.count()).select_from(base.subquery())) or 0
-    rows = session.execute(
-        base.order_by(
-            Documento.data_documento.desc().nulls_last(),
-            Documento.documento_id.desc(),
+    def _filtered_doc_ids():
+        stmt = (
+            select(Documento.documento_id)
+            .outerjoin(
+                DocumentoSerie, DocumentoSerie.documento_id == Documento.documento_id
+            )
+            .outerjoin(Serie, Serie.serie_id == DocumentoSerie.serie_id)
         )
-        .limit(limit)
-        .offset(offset)
-    ).all()
+        return _apply_document_filters(
+            stmt,
+            fonte=fonte,
+            devedor=devedor,
+            tipo_documento=tipo_documento,
+            date_from=date_from,
+            date_to=date_to,
+        ).group_by(Documento.documento_id)
 
-    items = [
-        {
-            "id": documento.documento_id,
-            "company": company,
-            "date": _as_iso(documento.data_documento),
-            "document_type": documento.tipo_documento,
+    total = session.scalar(
+        select(func.count()).select_from(_filtered_doc_ids().subquery())
+    ) or 0
+
+    page_ids = list(
+        session.scalars(
+            _filtered_doc_ids()
+            .order_by(
+                func.max(Documento.data_documento).desc().nulls_last(),
+                Documento.documento_id.desc(),
+            )
+            .limit(limit)
+            .offset(offset)
+        ).all()
+    )
+    if not page_ids:
+        return {
+            "items": [],
+            "total": int(total),
+            "limit": limit,
+            "offset": offset,
+            "has_more": False,
         }
-        for documento, company in rows
-    ]
+
+    docs = {
+        doc.documento_id: doc
+        for doc in session.scalars(
+            select(Documento).where(Documento.documento_id.in_(page_ids))
+        ).all()
+    }
+    company_by_doc = dict(
+        session.execute(
+            select(DocumentoSerie.documento_id, func.min(company))
+            .join(Serie, Serie.serie_id == DocumentoSerie.serie_id)
+            .where(DocumentoSerie.documento_id.in_(page_ids))
+            .group_by(DocumentoSerie.documento_id)
+        ).all()
+    )
+
+    items = []
+    for documento_id in page_ids:
+        documento = docs.get(documento_id)
+        if documento is None:
+            continue
+        items.append(
+            {
+                "id": documento.documento_id,
+                "company": company_by_doc.get(documento_id),
+                "date": _as_iso(documento.data_documento),
+                "document_type": documento.tipo_documento,
+            }
+        )
+
     return {
         "items": items,
         "total": int(total),
@@ -141,39 +190,43 @@ def list_documents(
     }
 
 
-
 def _public_document_url(documento: Documento) -> str:
-    """Return a browser-openable URL.
-
-    Opea stores stripped S3 paths (AccessDenied without signature), so the catalog
-    exposes a refresh/redirect endpoint instead of the bare object URL.
-    """
+    """Return a browser-openable URL."""
     if documento.fonte == "opea":
         return f"/api/documents/{documento.documento_id}/open"
     return documento.link_documento
 
 
+def _id_cedoc_for_document(session: Session, documento: Documento) -> str | None:
+    extras = documento.extras or {}
+    id_cedoc = extras.get("idCedoc") or extras.get("id_cedoc")
+    if id_cedoc:
+        return str(id_cedoc)
+    # Fall back to any linked série's extras.
+    series = session.scalars(
+        select(Serie)
+        .join(DocumentoSerie, DocumentoSerie.serie_id == Serie.serie_id)
+        .where(DocumentoSerie.documento_id == documento.documento_id)
+        .limit(5)
+    ).all()
+    for serie in series:
+        serie_extras = serie.extras or {}
+        if isinstance(serie_extras, dict):
+            value = serie_extras.get("idCedoc") or serie_extras.get("id_cedoc")
+            if value:
+                return str(value)
+    return None
+
+
 def resolve_document_open_url(session: Session, documento_id: int) -> str | None:
     """Resolve a working URL for Open document (refreshing Opea presigned links)."""
-    row = session.execute(
-        select(Documento, Emissao)
-        .join(Emissao, Documento.emissao_id == Emissao.emissao_id)
-        .where(Documento.documento_id == documento_id)
-    ).first()
-    if row is None:
+    documento = session.get(Documento, documento_id)
+    if documento is None:
         return None
-    documento, emissao = row
     if documento.fonte != "opea":
         return documento.link_documento
 
-    extras = documento.extras or {}
-    emissao_extras = emissao.extras or {}
-    id_cedoc = (
-        extras.get("idCedoc")
-        or extras.get("id_cedoc")
-        or emissao_extras.get("idCedoc")
-        or emissao_extras.get("id_cedoc")
-    )
+    id_cedoc = _id_cedoc_for_document(session, documento)
     from shared.opea_documents import refresh_opea_presigned_url
 
     return refresh_opea_presigned_url(
@@ -184,14 +237,20 @@ def resolve_document_open_url(session: Session, documento_id: int) -> str | None
 
 
 def get_document(session: Session, documento_id: int) -> dict | None:
-    row = session.execute(
-        select(Documento, Emissao)
-        .join(Emissao, Documento.emissao_id == Emissao.emissao_id)
-        .where(Documento.documento_id == documento_id)
-    ).first()
-    if row is None:
+    documento = session.get(Documento, documento_id)
+    if documento is None:
         return None
-    documento, emissao = row
+
+    series = session.scalars(
+        select(Serie)
+        .join(DocumentoSerie, DocumentoSerie.serie_id == Serie.serie_id)
+        .where(DocumentoSerie.documento_id == documento_id)
+        .order_by(Serie.numero_serie.asc(), Serie.serie_id.asc())
+    ).all()
+    primary = series[0] if series else None
+    company = None
+    if primary:
+        company = primary.devedor or primary.operacao
     extras = documento.extras or {}
     return {
         "id": documento.documento_id,
@@ -201,20 +260,34 @@ def get_document(session: Session, documento_id: int) -> dict | None:
         "inserted_at": _as_iso(documento.data_insercao),
         "url": _public_document_url(documento),
         "fonte": documento.fonte,
-        "company": emissao.devedor or emissao.operacao,
-        "isin": documento.isin,
-        "numero_emissao": documento.numero_emissao,
-        "codigo_cetip": documento.codigo_cetip,
-        "operacao": emissao.operacao,
-        "emission_url": None if emissao.fonte == "opea" else emissao.link,
+        "company": company,
+        "isin": documento.isin or (primary.isin if primary else None),
+        "numero_emissao": documento.numero_emissao
+        or (primary.numero_emissao if primary else None),
+        "codigo_cetip": documento.codigo_cetip
+        or (primary.codigo_cetip if primary else None),
+        "operacao": primary.operacao if primary else None,
+        "emission_url": None
+        if (primary and primary.fonte == "opea")
+        else (primary.link if primary else None),
+        "series": [
+            {
+                "id": serie.serie_id,
+                "numero_serie": serie.numero_serie,
+                "isin": serie.isin,
+                "codigo_cetip": serie.codigo_cetip,
+                "company": serie.devedor or serie.operacao,
+            }
+            for serie in series
+        ],
         "extras": _json_safe(extras) if extras else {},
     }
 
 
-def list_emissoes_filters(session: Session) -> dict:
+def list_series_filters(session: Session) -> dict:
     company = _company_expr()
     fontes = list(
-        session.scalars(select(Emissao.fonte).distinct().order_by(Emissao.fonte)).all()
+        session.scalars(select(Serie.fonte).distinct().order_by(Serie.fonte)).all()
     )
     companies = [
         value
@@ -229,7 +302,7 @@ def list_emissoes_filters(session: Session) -> dict:
     return {"fontes": fontes, "companies": companies}
 
 
-def _apply_emissao_filters(
+def _apply_serie_filters(
     stmt,
     *,
     fonte: str | None,
@@ -238,39 +311,19 @@ def _apply_emissao_filters(
     isin: str | None,
 ):
     if fonte:
-        stmt = stmt.where(Emissao.fonte == fonte)
+        stmt = stmt.where(Serie.fonte == fonte)
     if company:
         stmt = stmt.where(_company_expr() == company)
     if cetip:
         pattern = f"%{cetip}%"
-        stmt = stmt.where(
-            or_(
-                Emissao.codigos_cetip.ilike(pattern),
-                exists(
-                    select(Serie.serie_id).where(
-                        Serie.emissao_id == Emissao.emissao_id,
-                        Serie.codigo_cetip.ilike(pattern),
-                    )
-                ),
-            )
-        )
+        stmt = stmt.where(Serie.codigo_cetip.ilike(pattern))
     if isin:
         needle = isin.strip().upper()
-        stmt = stmt.where(
-            or_(
-                func.upper(Emissao.isin) == needle,
-                exists(
-                    select(Serie.serie_id).where(
-                        Serie.emissao_id == Emissao.emissao_id,
-                        func.upper(Serie.isin) == needle,
-                    )
-                ),
-            )
-        )
+        stmt = stmt.where(func.upper(Serie.isin) == needle)
     return stmt
 
 
-def list_emissoes(
+def list_series(
     session: Session,
     *,
     fonte: str | None = None,
@@ -283,16 +336,16 @@ def list_emissoes(
     limit = min(max(limit, 1), MAX_LIMIT)
     offset = max(offset, 0)
 
-    base = select(Emissao)
-    base = _apply_emissao_filters(
+    base = select(Serie)
+    base = _apply_serie_filters(
         base, fonte=fonte, company=company, cetip=cetip, isin=isin
     )
 
     total = session.scalar(select(func.count()).select_from(base.subquery())) or 0
     rows = session.scalars(
         base.order_by(
-            Emissao.data_emissao.desc().nulls_last(),
-            Emissao.emissao_id.desc(),
+            Serie.data_emissao.desc().nulls_last(),
+            Serie.serie_id.desc(),
         )
         .limit(limit)
         .offset(offset)
@@ -300,16 +353,17 @@ def list_emissoes(
 
     items = [
         {
-            "id": emissao.emissao_id,
-            "company": emissao.devedor or emissao.operacao,
-            "fonte": emissao.fonte,
-            "numero_emissao": emissao.numero_emissao,
-            "isin": emissao.isin,
-            "codigos_cetip": emissao.codigos_cetip,
-            "data_vencimento": _as_iso(emissao.data_vencimento),
-            "data_emissao": _as_iso(emissao.data_emissao),
+            "id": serie.serie_id,
+            "company": serie.devedor or serie.operacao,
+            "fonte": serie.fonte,
+            "numero_emissao": serie.numero_emissao,
+            "numero_serie": serie.numero_serie,
+            "isin": serie.isin,
+            "codigo_cetip": serie.codigo_cetip,
+            "data_vencimento": _as_iso(serie.data_vencimento),
+            "data_emissao": _as_iso(serie.data_emissao),
         }
-        for emissao in rows
+        for serie in rows
     ]
     return {
         "items": items,
@@ -320,52 +374,63 @@ def list_emissoes(
     }
 
 
-def get_emissao(session: Session, emissao_id: int) -> dict | None:
-    emissao = session.get(Emissao, emissao_id)
-    if emissao is None:
+def get_serie(session: Session, serie_id: int) -> dict | None:
+    serie = session.get(Serie, serie_id)
+    if serie is None:
         return None
 
-    series_rows = session.scalars(
-        select(Serie)
-        .where(Serie.emissao_id == emissao_id)
-        .order_by(Serie.numero_serie.asc(), Serie.serie_id.asc())
-    ).all()
     doc_rows = session.scalars(
         select(Documento)
-        .where(Documento.emissao_id == emissao_id)
+        .join(DocumentoSerie, DocumentoSerie.documento_id == Documento.documento_id)
+        .where(DocumentoSerie.serie_id == serie_id)
         .order_by(
             Documento.data_documento.desc().nulls_last(),
             Documento.documento_id.desc(),
         )
     ).all()
 
+    # Sibling séries in the same source emission grouping (optional context).
+    siblings: list[Serie] = []
+    if serie.emissao_id:
+        siblings = list(
+            session.scalars(
+                select(Serie)
+                .where(
+                    Serie.fonte == serie.fonte,
+                    Serie.emissao_id == serie.emissao_id,
+                    Serie.serie_id != serie.serie_id,
+                )
+                .order_by(Serie.numero_serie.asc(), Serie.serie_id.asc())
+            ).all()
+        )
+
     return {
-        "id": emissao.emissao_id,
-        "company": emissao.devedor or emissao.operacao,
-        "operacao": emissao.operacao,
-        "devedor": emissao.devedor,
-        "fonte": emissao.fonte,
-        "numero_emissao": emissao.numero_emissao,
-        "link": None if emissao.fonte == "opea" else emissao.link,
-        "isin": emissao.isin,
-        "codigos_cetip": emissao.codigos_cetip,
-        "data_emissao": _as_iso(emissao.data_emissao),
-        "data_vencimento": _as_iso(emissao.data_vencimento),
-        "series": [
+        "id": serie.serie_id,
+        "company": serie.devedor or serie.operacao,
+        "operacao": serie.operacao,
+        "devedor": serie.devedor,
+        "fonte": serie.fonte,
+        "numero_emissao": serie.numero_emissao,
+        "numero_serie": serie.numero_serie,
+        "link": None if serie.fonte == "opea" else serie.link,
+        "isin": serie.isin,
+        "codigo_cetip": serie.codigo_cetip,
+        "emissao_id": serie.emissao_id,
+        "data_emissao": _as_iso(serie.data_emissao),
+        "data_vencimento": _as_iso(serie.data_vencimento),
+        "remuneracao": serie.remuneracao,
+        "indexador": serie.indexador,
+        "quantidade": serie.quantidade,
+        "valor": float(serie.valor) if serie.valor is not None else None,
+        "extras": _json_safe(serie.extras) if serie.extras else {},
+        "siblings": [
             {
-                "id": serie.serie_id,
-                "numero_serie": serie.numero_serie,
-                "codigo_cetip": serie.codigo_cetip,
-                "isin": serie.isin,
-                "data_emissao": _as_iso(serie.data_emissao),
-                "data_vencimento": _as_iso(serie.data_vencimento),
-                "remuneracao": serie.remuneracao,
-                "indexador": serie.indexador,
-                "quantidade": serie.quantidade,
-                "valor": float(serie.valor) if serie.valor is not None else None,
-                "extras": _json_safe(serie.extras) if serie.extras else {},
+                "id": sibling.serie_id,
+                "numero_serie": sibling.numero_serie,
+                "codigo_cetip": sibling.codigo_cetip,
+                "isin": sibling.isin,
             }
-            for serie in series_rows
+            for sibling in siblings
         ],
         "documentos": [
             {
@@ -378,3 +443,9 @@ def get_emissao(session: Session, emissao_id: int) -> dict | None:
             for documento in doc_rows
         ],
     }
+
+
+# Back-compat aliases for older callers during transition.
+list_emissoes_filters = list_series_filters
+list_emissoes = list_series
+get_emissao = get_serie

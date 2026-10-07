@@ -1,17 +1,18 @@
 """Abstract base class implementing the shared discover + re-check workflow.
 
-Concrete scrapers implement three things:
+Concrete scrapers implement:
 - ``source_name`` (class attribute)
-- ``list_emissoes()`` -> iterable of ``EmissaoData`` (the catalog listing)
-- ``fetch_detail(emissao)`` -> ``DetailResult`` (one operation's detail page)
+- ``list_series()`` -> iterable of ``SerieData`` (catalog listing / discovery)
+- ``fetch_detail(serie)`` -> ``DetailResult`` (one série's detail page)
 
-The base class handles: upserting the list, selecting which operations to (re-)visit,
-respecting the Lambda time budget, upserting séries/documents, marking re-check
-timestamps, and error isolation so one bad operation never aborts the whole run.
+The base class handles: upserting séries (with skip/warn rules), selecting which
+séries to (re-)visit, respecting the time budget, upserting documents and M2M
+links, marking re-check timestamps, and error isolation.
 """
 
 from __future__ import annotations
 
+import os
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Iterable
@@ -20,14 +21,17 @@ from .config import ScraperConfig
 from .db import ensure_schema, session_scope
 from .http_client import PoliteClient
 from .logging_config import get_logger
-from .models import Emissao
-from .records import DetailResult, EmissaoData
+from .models import Serie
+from .records import DetailResult, SerieData
 from .repository import (
-    apply_emissao_detail,
-    count_emissoes,
-    select_emissoes_para_detalhe,
+    apply_serie_detail,
+    count_series,
+    link_documento_series,
+    mark_serie_detailed,
+    resolve_serie_ids_by_emissao_id,
+    resolve_serie_ids_by_origem,
+    select_series_para_detalhe,
     upsert_documento,
-    upsert_emissao,
     upsert_serie,
 )
 
@@ -81,18 +85,19 @@ class BaseScraper(ABC):
 
     # -- abstract API to implement per site --------------------------------------
     @abstractmethod
-    def list_emissoes(self) -> Iterable[EmissaoData]:
-        """Yield every emission from the catalog listing (list-level fields)."""
+    def list_series(self) -> Iterable[SerieData]:
+        """Yield every série from the catalog listing (list-level fields)."""
 
     @abstractmethod
-    def fetch_detail(self, emissao: Emissao) -> DetailResult:
-        """Fetch one operation's detail page: updates + séries + documents."""
+    def fetch_detail(self, serie: Serie) -> DetailResult:
+        """Fetch one série's detail page: updates + sibling séries + documents."""
 
     # -- orchestration ------------------------------------------------------------
     def run(self) -> dict:
         summary = {
             "source": self.source_name,
             "descobertas": 0,
+            "series_puladas": 0,
             "detalhes_processados": 0,
             "series_gravadas": 0,
             "documentos_gravados": 0,
@@ -112,34 +117,50 @@ class BaseScraper(ABC):
         return summary
 
     def _discover(self, summary: dict) -> None:
-        """Fetch the listing and upsert every emission (new + existing)."""
+        """Fetch the listing and upsert every série that has ISIN and/or CETIP."""
         self.logger.info("discovery_start", extra={"source": self.source_name})
         with session_scope(self.config) as session:
-            for data in self.list_emissoes():
+            for data in self.list_series():
                 try:
-                    upsert_emissao(session, data)
-                    summary["descobertas"] += 1
+                    result = upsert_serie(session, data)
+                    if result.status.startswith("skipped"):
+                        summary["series_puladas"] += 1
+                    else:
+                        summary["descobertas"] += 1
+                        summary["series_gravadas"] += 1
                 except Exception as exc:
                     summary["erros"] += 1
                     self.logger.warning(
                         "discovery_upsert_error",
                         extra={"id_origem": data.id_origem, "error": str(exc)},
                     )
-            total = count_emissoes(session, self.source_name)
+            total = count_series(session, self.source_name)
         self.logger.info(
             "discovery_done",
-            extra={"descobertas": summary["descobertas"], "total_no_banco": total},
+            extra={
+                "descobertas": summary["descobertas"],
+                "series_puladas": summary["series_puladas"],
+                "total_no_banco": total,
+            },
         )
 
     def _process_details(self, summary: dict) -> None:
-        """Visit operations needing detail/re-check until the time budget runs out."""
+        """Visit séries needing detail/re-check until the time budget runs out."""
         with session_scope(self.config) as session:
-            pending = select_emissoes_para_detalhe(
-                session, self.source_name, limit=self.config.detail_batch_limit
+            # Full EC2 backfill drains never-detailed rows only; Lambdas also re-check.
+            include_recheck = os.getenv("EXECUTION_MODE", "").strip().lower() != "ec2_backfill"
+            pending = select_series_para_detalhe(
+                session,
+                self.source_name,
+                limit=self.config.detail_batch_limit,
+                include_recheck=include_recheck,
             )
-            self.logger.info("detail_queue", extra={"pendentes": len(pending)})
+            self.logger.info(
+                "detail_queue",
+                extra={"pendentes": len(pending), "include_recheck": include_recheck},
+            )
 
-            for emissao in pending:
+            for serie in pending:
                 if not self.budget.has_time():
                     summary["interrompido_por_tempo"] = True
                     self.logger.info(
@@ -147,34 +168,64 @@ class BaseScraper(ABC):
                         extra={"restante_ms": self.budget.remaining_ms()},
                     )
                     break
-                self._process_single_detail(session, emissao, summary)
+                self._process_single_detail(session, serie, summary)
 
-    def _process_single_detail(self, session, emissao: Emissao, summary: dict) -> None:
+    def _process_single_detail(self, session, serie: Serie, summary: dict) -> None:
         try:
-            result = self.fetch_detail(emissao)
+            result = self.fetch_detail(serie)
         except Exception as exc:
             summary["erros"] += 1
             self.logger.warning(
                 "detail_fetch_error",
                 extra={
-                    "emissao_id": emissao.emissao_id,
-                    "id_origem": emissao.id_origem,
+                    "serie_id": serie.serie_id,
+                    "id_origem": serie.id_origem,
                     "error": str(exc),
                 },
             )
             return
 
         try:
-            for serie in result.series:
-                upsert_serie(session, emissao.emissao_id, self.source_name, serie)
-                summary["series_gravadas"] += 1
+            sibling_ids: list[int] = []
+            for sibling in result.series:
+                upsert_result = upsert_serie(session, sibling)
+                if upsert_result.serie_id is not None:
+                    sibling_ids.append(upsert_result.serie_id)
+                    summary["series_gravadas"] += 1
+                elif upsert_result.status.startswith("skipped"):
+                    summary["series_puladas"] += 1
+
+            apply_serie_detail(session, serie.serie_id, result.serie_updates)
+            # Sibling séries discovered in the same detail payload are also "seen".
+            for sibling_id in sibling_ids:
+                if sibling_id != serie.serie_id:
+                    mark_serie_detailed(session, sibling_id)
+
+            default_serie_ids = [serie.serie_id]
             for documento in result.documentos:
                 if not documento.link_documento:
                     continue
-                upsert_documento(session, emissao.emissao_id, self.source_name, documento)
+                if not documento.emissao_id and serie.emissao_id:
+                    documento.emissao_id = serie.emissao_id
+                doc_id = upsert_documento(session, self.source_name, documento)
+                if doc_id is None:
+                    continue
+                link_ids = default_serie_ids
+                if documento.serie_id_origens:
+                    resolved = resolve_serie_ids_by_origem(
+                        session, self.source_name, documento.serie_id_origens
+                    )
+                    if resolved:
+                        link_ids = resolved
+                elif documento.emissao_id:
+                    by_emissao = resolve_serie_ids_by_emissao_id(
+                        session, self.source_name, documento.emissao_id
+                    )
+                    if by_emissao:
+                        link_ids = by_emissao
+                link_documento_series(session, doc_id, link_ids)
                 summary["documentos_gravados"] += 1
 
-            apply_emissao_detail(session, emissao.emissao_id, result.emissao_updates)
             session.commit()
             summary["detalhes_processados"] += 1
         except Exception as exc:
@@ -182,5 +233,5 @@ class BaseScraper(ABC):
             summary["erros"] += 1
             self.logger.warning(
                 "detail_persist_error",
-                extra={"emissao_id": emissao.emissao_id, "error": str(exc)},
+                extra={"serie_id": serie.serie_id, "error": str(exc)},
             )

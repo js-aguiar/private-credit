@@ -12,9 +12,9 @@ from shared.repository import count_table_rows
 @dataclass
 class TableCounts:
     fonte: str | None
-    emissoes: int
     series: int
     documentos: int
+    documentos_series: int = 0
 
 
 def get_table_counts(fonte: str | None = None) -> TableCounts:

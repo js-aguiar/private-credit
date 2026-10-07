@@ -7,11 +7,8 @@ API base: https://aks-prod.virgo.inc/mtr/bff-portal
   List:      GET /v1/operations?pageNumber={page}&pageSize={size}
              → {"content": [...], "metadata": {"pageNumber", "pageSize", "totalPages", ...}}
   Detail:    GET /v1/operations/{operationId}
-             Detail ``series[]`` powers the portal "Outras informações" accordion
-             (``GeneralInfoAccordion_toggler__FWYOA``): Código IF/ISIN, tipo, ICVM,
-             dates, taxa, indexador, volume, quantidade, PU.
+             Detail ``series[]`` powers the portal "Outras informações" accordion.
   Documents: GET /v1/operations/{operationId}/documents
-             → [{id, type, emissionDate, description, download}, ...]
 """
 
 from __future__ import annotations
@@ -22,7 +19,7 @@ from typing import Any
 from shared.config import ScraperConfig
 from shared.http_client import PoliteClient
 from shared.parsing import parse_br_date
-from shared.records import DetailResult, DocumentoData, EmissaoData, SerieData
+from shared.records import DetailResult, DocumentoData, SerieData
 from shared.scraper_base import BaseScraper
 
 _BFF_BASE = "https://aks-prod.virgo.inc/mtr/bff-portal"
@@ -31,12 +28,12 @@ _DETAIL_URL = f"{_BFF_BASE}/v1/operations/{{operation_id}}"
 _DOCUMENTS_URL = f"{_BFF_BASE}/v1/operations/{{operation_id}}/documents"
 _PAGE_SIZE = 50
 _PORTAL_BASE = "https://investidor.rizasec.com/emissoes"
-# Virgo BFF rejects requests without a portal Origin (403).
 _BFF_HEADERS = {
     "Accept": "application/json",
     "Origin": "https://investidor.rizasec.com",
     "Referer": "https://investidor.rizasec.com/",
 }
+FONTE = "riza"
 
 
 class RizaScraper(BaseScraper):
@@ -47,7 +44,7 @@ class RizaScraper(BaseScraper):
         self.client.close()
         self.client = PoliteClient(config, headers=_BFF_HEADERS)
 
-    def list_emissoes(self):
+    def list_series(self):
         page = 0
         while True:
             try:
@@ -64,9 +61,8 @@ class RizaScraper(BaseScraper):
             total_pages = int(metadata.get("totalPages") or 1)
 
             for item in items:
-                data = self._map_list_item(item)
-                if data is not None:
-                    yield data
+                for serie in self._map_list_item_to_series(item):
+                    yield serie
 
             self.logger.info(
                 "riza_list_page",
@@ -80,66 +76,72 @@ class RizaScraper(BaseScraper):
                 break
             page += 1
 
-    def _map_list_item(self, record: dict) -> EmissaoData | None:
+    def _map_list_item_to_series(self, record: dict) -> list[SerieData]:
         operation_id = (record.get("id") or "").strip()
         if not operation_id:
-            return None
+            return []
 
-        series = record.get("series") or []
-        instrument_codes = [
-            str(s.get("instrumentCode")).strip()
-            for s in series
-            if isinstance(s, dict) and s.get("instrumentCode")
-        ]
-        series_numbers = [
-            _normalize_serie_numero(s.get("number"))
-            for s in series
-            if isinstance(s, dict) and s.get("number") is not None
-        ]
-        series_numbers = [n for n in series_numbers if n]
-
-        return EmissaoData(
-            fonte=self.source_name,
-            id_origem=operation_id,
-            link=f"{_PORTAL_BASE}/{operation_id}",
-            numero_emissao=str(record.get("issuanceNumber"))
+        numero_emissao = (
+            str(record.get("issuanceNumber"))
             if record.get("issuanceNumber") is not None
-            else None,
-            codigos_cetip=" ".join(instrument_codes) or None,
-            operacao=record.get("alias"),
-            # List payload rarely includes counterparties; filled on detail.
-            devedor=self._devedor_from_counterparties(record.get("counterparties")),
-            tipo_ativo=record.get("type"),
-            series_raw="-".join(series_numbers) if series_numbers else None,
-            valor_total=_to_decimal(record.get("totalValue")),
-            data_emissao=parse_br_date(str(record.get("emissionDate") or "")[:10]),
-            data_vencimento=parse_br_date(str(record.get("dueDate") or "")[:10]),
-            extras={
-                "status": record.get("status"),
-                "assetRisk": record.get("assetRisk"),
-                "assetType": record.get("assetType"),
-                "emissor": record.get("emissor"),
-                "fiduciaryAgent": record.get("fiduciaryAgent"),
-                "series": series,
-            },
+            else None
         )
+        common_extras = {
+            "status": record.get("status"),
+            "assetRisk": record.get("assetRisk"),
+            "assetType": record.get("assetType"),
+            "emissor": record.get("emissor"),
+            "fiduciaryAgent": record.get("fiduciaryAgent"),
+            "operation_id": operation_id,
+        }
+        series_payload = record.get("series") or []
+        out: list[SerieData] = []
+        for item in series_payload:
+            if not isinstance(item, dict):
+                continue
+            numero = _normalize_serie_numero(item.get("number"))
+            if not numero:
+                continue
+            isin = (item.get("isinCode") or "").strip() or None
+            cetip = (item.get("instrumentCode") or "").strip() or None
+            if not (isin or cetip):
+                continue
+            id_origem = f"{operation_id}:{cetip or isin or numero}"
+            out.append(
+                SerieData(
+                    fonte=FONTE,
+                    id_origem=id_origem,
+                    emissao_id=operation_id,
+                    link=f"{_PORTAL_BASE}/{operation_id}",
+                    numero_serie=numero,
+                    isin=isin,
+                    codigo_cetip=cetip,
+                    numero_emissao=numero_emissao,
+                    operacao=record.get("alias"),
+                    devedor=self._devedor_from_counterparties(record.get("counterparties")),
+                    tipo_ativo=record.get("type"),
+                    valor_total=_to_decimal(record.get("totalValue")),
+                    data_emissao=parse_br_date(str(record.get("emissionDate") or "")[:10]),
+                    data_vencimento=parse_br_date(str(record.get("dueDate") or "")[:10]),
+                    extras={**common_extras, "series_item": item},
+                )
+            )
+        return out
 
-    def fetch_detail(self, emissao) -> DetailResult:
+    def fetch_detail(self, serie) -> DetailResult:
+        operation_id = serie.emissao_id or serie.id_origem.split(":", 1)[0]
         detail: dict = {}
         try:
-            detail = (
-                self.client.get_json(_DETAIL_URL.format(operation_id=emissao.id_origem))
-                or {}
-            )
+            detail = self.client.get_json(_DETAIL_URL.format(operation_id=operation_id)) or {}
         except Exception as exc:
             self.logger.warning(
                 "riza_detail_error",
-                extra={"id_origem": emissao.id_origem, "error": str(exc)},
+                extra={"id_origem": serie.id_origem, "error": str(exc)},
             )
 
-        series_source = (detail or {}).get("series") or (emissao.extras or {}).get("series") or []
-        series = self._extract_series(series_source, emissao)
-        documentos = self._fetch_documents(emissao)
+        series_source = (detail or {}).get("series") or []
+        series = self._extract_series(series_source, serie, operation_id)
+        documentos = self._fetch_documents(serie, operation_id)
 
         updates: dict = {"extras": {"detalhe_acessivel": bool(detail)}}
         if detail:
@@ -148,20 +150,19 @@ class RizaScraper(BaseScraper):
             quantidade_total = _sum_series_amounts(series)
             updates.update(
                 {
-                    "operacao": detail.get("alias") or emissao.operacao,
+                    "operacao": detail.get("alias") or serie.operacao,
                     "devedor": self._devedor_from_counterparties(counterparties)
-                    or emissao.devedor,
-                    "tipo_ativo": detail.get("type") or emissao.tipo_ativo,
+                    or serie.devedor,
+                    "tipo_ativo": detail.get("type") or serie.tipo_ativo,
                     "valor_total": _to_decimal(detail.get("totalValue"))
-                    or emissao.valor_total,
+                    or serie.valor_total,
                     "data_emissao": parse_br_date(str(detail.get("emissionDate") or "")[:10])
-                    or emissao.data_emissao,
+                    or serie.data_emissao,
                     "data_vencimento": parse_br_date(str(detail.get("dueDate") or "")[:10])
-                    or emissao.data_vencimento,
+                    or serie.data_vencimento,
                     "extras": {
                         "detalhe_acessivel": True,
                         "status": detail.get("status"),
-                        # Portal "Outras informações" / emission summary.
                         "lastro": detail.get("assetType"),
                         "assetRisk": detail.get("assetRisk"),
                         "assetType": detail.get("assetType"),
@@ -188,17 +189,38 @@ class RizaScraper(BaseScraper):
                     },
                 }
             )
+            # Enrich the série being detailed from its matching detail row.
+            for candidate in series:
+                if candidate.id_origem == serie.id_origem or (
+                    candidate.codigo_cetip and candidate.codigo_cetip == serie.codigo_cetip
+                ):
+                    for field in (
+                        "isin",
+                        "codigo_cetip",
+                        "valor",
+                        "remuneracao",
+                        "indexador",
+                        "data_emissao",
+                        "data_vencimento",
+                        "quantidade",
+                    ):
+                        value = getattr(candidate, field)
+                        if value is not None:
+                            updates[field] = value
+                    break
         elif not documentos:
             updates["extras"] = {"detalhe_acessivel": False}
 
+        siblings = [s for s in series if s.id_origem != serie.id_origem]
         return DetailResult(
-            emissao_updates=updates,
-            series=series,
+            serie_updates=updates,
+            series=siblings,
             documentos=documentos,
         )
 
-    def _extract_series(self, series_payload: Any, emissao) -> list[SerieData]:
-        """Map detail ``series[]`` including Outras informações accordion fields."""
+    def _extract_series(
+        self, series_payload: Any, serie, operation_id: str
+    ) -> list[SerieData]:
         if not isinstance(series_payload, list):
             return []
         series: list[SerieData] = []
@@ -208,6 +230,10 @@ class RizaScraper(BaseScraper):
             numero = _normalize_serie_numero(item.get("number"))
             if not numero:
                 continue
+            isin = (item.get("isinCode") or "").strip() or None
+            cetip = (item.get("instrumentCode") or "").strip() or None
+            if not (isin or cetip):
+                continue
             params = item.get("params") if isinstance(item.get("params"), dict) else {}
             indexador = _series_indexer(item, params)
             interest_rate = params.get("interestRate")
@@ -215,21 +241,23 @@ class RizaScraper(BaseScraper):
             unit_value = params.get("unitValue")
             total_value = params.get("totalValue")
             first_payment = parse_br_date(str(item.get("firstPaymentDate") or "")[:10])
+            id_origem = f"{operation_id}:{cetip or isin or numero}"
             series.append(
                 SerieData(
+                    fonte=FONTE,
+                    id_origem=id_origem,
+                    emissao_id=operation_id,
+                    link=serie.link,
                     numero_serie=numero,
-                    isin=(item.get("isinCode") or "").strip() or None,
-                    numero_emissao=emissao.numero_emissao,
-                    codigo_cetip=(item.get("instrumentCode") or "").strip() or None,
-                    # Volume Total de Emissão.
+                    isin=isin,
+                    numero_emissao=serie.numero_emissao,
+                    codigo_cetip=cetip,
+                    operacao=serie.operacao,
                     valor=_to_decimal(total_value),
-                    # Taxa Juros Pré/Spread (%) + indexador.
                     remuneracao=_format_remuneracao(indexador, interest_rate),
                     indexador=indexador,
-                    # Data de Integralização.
                     data_emissao=first_payment,
                     data_vencimento=parse_br_date(str(item.get("dueDate") or "")[:10]),
-                    # Quantidade de Papéis de Emissão.
                     quantidade=_to_int(amount),
                     extras={
                         "id": item.get("id"),
@@ -247,16 +275,14 @@ class RizaScraper(BaseScraper):
                         "params": params or None,
                         "nextAnniversary": item.get("nextAnniversary"),
                         "outras_informacoes": {
-                            "codigo_if": (item.get("instrumentCode") or "").strip()
-                            or None,
-                            "codigo_isin": (item.get("isinCode") or "").strip() or None,
+                            "codigo_if": cetip,
+                            "codigo_isin": isin,
                             "tipo": item.get("type"),
                             "icvm": item.get("icvm"),
                             "data_integralizacao": first_payment.isoformat()
                             if first_payment
                             else None,
-                            "data_vencimento": str(item.get("dueDate") or "")[:10]
-                            or None,
+                            "data_vencimento": str(item.get("dueDate") or "")[:10] or None,
                             "taxa_juros_spread": _to_json_number(interest_rate),
                             "indexador": indexador,
                             "volume_total": _to_json_number(total_value),
@@ -268,15 +294,15 @@ class RizaScraper(BaseScraper):
             )
         return series
 
-    def _fetch_documents(self, emissao) -> list[DocumentoData]:
+    def _fetch_documents(self, serie, operation_id: str) -> list[DocumentoData]:
         try:
             payload = self.client.get_json(
-                _DOCUMENTS_URL.format(operation_id=emissao.id_origem)
+                _DOCUMENTS_URL.format(operation_id=operation_id)
             )
         except Exception as exc:
             self.logger.warning(
                 "riza_documents_error",
-                extra={"id_origem": emissao.id_origem, "error": str(exc)},
+                extra={"id_origem": serie.id_origem, "error": str(exc)},
             )
             return []
 
@@ -304,10 +330,9 @@ class RizaScraper(BaseScraper):
                     titulo=titulo,
                     tipo_documento=doc_type,
                     data_documento=parse_br_date(str(item.get("emissionDate") or "")[:10]),
-                    numero_emissao=emissao.numero_emissao,
-                    codigo_cetip=(emissao.codigos_cetip or "").split()[0]
-                    if emissao.codigos_cetip
-                    else None,
+                    numero_emissao=serie.numero_emissao,
+                    codigo_cetip=serie.codigo_cetip,
+                    emissao_id=operation_id,
                     extras=item,
                 )
             )
@@ -333,7 +358,6 @@ class RizaScraper(BaseScraper):
 
 
 def _normalize_serie_numero(value: Any) -> str:
-    """Normalize API série numbers like ``1.0`` → ``1``."""
     raw = str(value or "").strip()
     if not raw:
         return ""
@@ -356,7 +380,6 @@ def _to_decimal(value: Any) -> Decimal | None:
 
 
 def _to_json_number(value: Any) -> float | int | None:
-    """JSONB-safe numeric (Decimal is not JSON-serializable via psycopg2)."""
     if value is None or value == "":
         return None
     if isinstance(value, Decimal):
@@ -395,7 +418,6 @@ def _series_indexer(item: dict, params: dict) -> str | None:
 
 
 def _format_remuneracao(indexador: str | None, interest_rate: Any) -> str | None:
-    """Build a human-readable remuneration string for the accordion taxa field."""
     rate = _to_decimal(interest_rate)
     if rate is None and not indexador:
         return None

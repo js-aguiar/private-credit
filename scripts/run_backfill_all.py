@@ -22,7 +22,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from shared.config import ScraperConfig  # noqa: E402
 from shared.db import ensure_schema, session_scope  # noqa: E402
 from shared.logging_config import bind_run_context, configure_logging, get_logger  # noqa: E402
-from shared.repository import count_emissoes_sem_detalhe  # noqa: E402
+from shared.repository import count_series_sem_detalhe  # noqa: E402
 from shared.scraper_base import DeadlineTimeBudget  # noqa: E402
 
 SCRAPERS: dict[str, tuple[str, str]] = {
@@ -81,7 +81,7 @@ def _run_source(source: str, deadline: float, logger) -> dict:
         _merge_summary(totals, summary)
 
         with session_scope(config) as session:
-            pending = count_emissoes_sem_detalhe(session, source)
+            pending = count_series_sem_detalhe(session, source)
 
         logger.info(
             "backfill_scraper_batch",
@@ -138,6 +138,8 @@ def main() -> int:
 
     sources = _resolve_sources(args.sources)
     run_id = os.getenv("RUN_ID") or str(uuid.uuid4())
+    os.environ["EXECUTION_MODE"] = "ec2_backfill"
+    os.environ.setdefault("RUN_ID", run_id)
     configure_logging()
     bind_run_context(execution_mode="ec2_backfill", run_id=run_id)
     logger = get_logger("run_backfill_all")
