@@ -95,6 +95,7 @@ async function loadFilters() {
 }
 
 function renderRows(items, append) {
+  if (!els.list) return;
   if (!append) els.list.replaceChildren();
   for (const item of items) {
     const button = document.createElement("button");
@@ -222,6 +223,10 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeSheet();
 });
 
-loadFilters()
-  .catch(() => setStatus("Could not load filters."))
-  .finally(() => loadDocuments(false));
+if (!els.list) {
+  setStatus("Page shell is out of date. Hard-refresh (Ctrl/Cmd+Shift+R) and try again.");
+} else {
+  loadFilters()
+    .catch(() => setStatus("Could not load filters."))
+    .finally(() => loadDocuments(false));
+}
