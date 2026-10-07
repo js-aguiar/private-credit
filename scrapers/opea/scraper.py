@@ -271,6 +271,13 @@ class OpeaScraper(BaseScraper):
     _FILES_URL = f"{_BFF_BASE}cedoc/files"
     _PAGE_SIZE = 50
 
+    def __init__(self, config, context=None):
+        super().__init__(config, context=context)
+        # Cedoc/files is institution-wide (~18MB). Cache once per process so a
+        # full backfill does not re-download it for every série.
+        self._cedoc_children_cache: list[dict] | None = None
+        self._cedoc_cache_id: str | None = None
+
     def list_series(self):
         grouped: dict[str, list[dict]] = defaultdict(list)
         page = 1
@@ -391,13 +398,44 @@ class OpeaScraper(BaseScraper):
         }
         return updates
 
+    def _get_cedoc_children(self, id_cedoc: str) -> list[dict]:
+        """Return institution-wide cedoc children, fetching at most once per run."""
+        if self._cedoc_children_cache is not None:
+            self.logger.info(
+                "opea_cedoc_cache_hit",
+                extra={
+                    "id_cedoc": id_cedoc,
+                    "cached_id_cedoc": self._cedoc_cache_id,
+                    "children": len(self._cedoc_children_cache),
+                },
+            )
+            return self._cedoc_children_cache
+
+        try:
+            resp = self.client.get_json(self._FILES_URL, params={"idCedoc": id_cedoc})
+        except Exception as exc:
+            self.logger.warning(
+                "opea_cedoc_error",
+                extra={"id_cedoc": id_cedoc, "error": str(exc)},
+            )
+            return []
+
+        children: list[dict] = (resp or {}).get("children") or []
+        self._cedoc_children_cache = children
+        self._cedoc_cache_id = str(id_cedoc)
+        self.logger.info(
+            "opea_cedoc_cache_miss",
+            extra={"id_cedoc": id_cedoc, "children": len(children)},
+        )
+        return children
+
     def _fetch_documents(
         self,
         serie,
         detail: dict,
         parent: str,
     ) -> list[DocumentoData]:
-        """Fetch documents once; attach to all séries sharing ``emissao_id``."""
+        """Filter cached cedoc children; attach to all séries sharing ``emissao_id``."""
         id_cedoc = detail.get("idCedoc")
         if not id_cedoc:
             return []
@@ -410,16 +448,7 @@ class OpeaScraper(BaseScraper):
         if not emission_code:
             return []
 
-        try:
-            resp = self.client.get_json(self._FILES_URL, params={"idCedoc": id_cedoc})
-        except Exception as exc:
-            self.logger.warning(
-                "opea_cedoc_error",
-                extra={"id_origem": serie.id_origem, "error": str(exc)},
-            )
-            return []
-
-        children: list[dict] = (resp or {}).get("children") or []
+        children = self._get_cedoc_children(str(id_cedoc))
         docs: list[DocumentoData] = []
         seen_ids: set[str] = set()
         for child in children:
