@@ -297,7 +297,8 @@ class VertScraper(BaseScraper):
                     break
                 page += 1
 
-        self._docs_by_emission[cache_key] = docs
+        # Store a copy so _append_last_report cannot mutate the cache entry.
+        self._docs_by_emission[cache_key] = list(docs)
         self.logger.info(
             "vert_docs_cache_miss",
             extra={
