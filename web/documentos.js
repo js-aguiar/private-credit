@@ -185,7 +185,7 @@ async function openDetail(id) {
       kv("CETIP", doc.codigo_cetip),
       kv("Operation", doc.operacao),
       seriesBlock,
-      kv("Portal page", doc.fonte === "opea" ? null : doc.emission_url, true),
+      kv("Portal page", doc.emission_url, true),
       kv("Inserted", doc.inserted_at),
       extras,
       resolveUrl(doc.url)
