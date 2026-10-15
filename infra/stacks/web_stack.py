@@ -122,7 +122,7 @@ class WebStack(Stack):
             protocol_policy=cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
         )
 
-        # Clean /documentos path → static file (default_root_object only covers /).
+        # Clean catalog paths → static files (default_root_object only covers /).
         documentos_rewrite = cloudfront.Function(
             self,
             "DocumentosPathRewrite",
@@ -133,6 +133,8 @@ function handler(event) {
   var uri = request.uri;
   if (uri === '/documentos' || uri === '/documentos/') {
     request.uri = '/documentos.html';
+  } else if (uri === '/pagamentos' || uri === '/pagamentos/') {
+    request.uri = '/pagamentos.html';
   }
   return request;
 }
@@ -187,7 +189,12 @@ function handler(event) {
             "CatalogHtmlDeploy",
             destination_bucket=bucket,
             distribution=distribution,
-            distribution_paths=["/", "/index.html", "/documentos.html"],
+            distribution_paths=[
+                "/",
+                "/index.html",
+                "/documentos.html",
+                "/pagamentos.html",
+            ],
             cache_control=[
                 s3deploy.CacheControl.max_age(Duration.seconds(0)),
                 s3deploy.CacheControl.must_revalidate(),
@@ -201,6 +208,10 @@ function handler(event) {
                 s3deploy.Source.data(
                     "documentos.html",
                     (WEB_DIR / "documentos.html").read_text(encoding="utf-8"),
+                ),
+                s3deploy.Source.data(
+                    "pagamentos.html",
+                    (WEB_DIR / "pagamentos.html").read_text(encoding="utf-8"),
                 ),
             ],
         )
