@@ -201,7 +201,7 @@ async function openDetail(id) {
       kv("Concentration", extras.concentracao),
       kv("Fiduciary agent", extras.agente_fiduciario),
       kv("Segment", extras.segmento),
-      kv("Portal page", data.fonte === "opea" ? null : data.link, true),
+      kv("Portal page", data.link, true),
       `</section>`,
       `<section class="detail-section"><h3>Documents (${(data.documentos || []).length})</h3>`,
       renderDocuments(data.documentos),

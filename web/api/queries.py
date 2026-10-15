@@ -267,9 +267,7 @@ def get_document(session: Session, documento_id: int) -> dict | None:
         "codigo_cetip": documento.codigo_cetip
         or (primary.codigo_cetip if primary else None),
         "operacao": primary.operacao if primary else None,
-        "emission_url": None
-        if (primary and primary.fonte == "opea")
-        else (primary.link if primary else None),
+        "emission_url": primary.link if primary else None,
         "series": [
             {
                 "id": serie.serie_id,
@@ -412,7 +410,7 @@ def get_serie(session: Session, serie_id: int) -> dict | None:
         "fonte": serie.fonte,
         "numero_emissao": serie.numero_emissao,
         "numero_serie": serie.numero_serie,
-        "link": None if serie.fonte == "opea" else serie.link,
+        "link": serie.link,
         "isin": serie.isin,
         "codigo_cetip": serie.codigo_cetip,
         "emissao_id": serie.emissao_id,

@@ -13,22 +13,49 @@ API base: https://app.opea.com.br/bff/v1/api/
           → {"content": {..., "idCedoc": "<guid>", ...}}
   Files:  GET cedoc/files?idCedoc={idCedoc}
           → {"children": [{name, url, categoryName, createdOn, ...}]}
+
+Orchestration (``run`` / ``_process_details``):
+  Phase A — list discovery (portal ``link`` set per série).
+  Phase B — filter/upsert cedoc documents **once per** ``emissao_id`` among the pending
+            detail queue (cedoc download cached process-wide).
+  Phase C — one detalhe GET per série for field updates only (``documentos=[]``).
 """
 
 from __future__ import annotations
 
+import os
+import time
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from shared.db import session_scope
 from shared.mapping import pick
 from shared.opea_documents import normalize_opea_document_url, opea_file_id
 from shared.parsing import parse_br_date
 from shared.records import DetailResult, DocumentoData, SerieData
+from shared.repository import (
+    link_documento_series,
+    resolve_serie_ids_by_emissao_id,
+    select_series_para_detalhe,
+    upsert_documento,
+)
 from shared.scraper_base import BaseScraper
 
 _BFF_BASE = "https://app.opea.com.br/bff/v1/api/"
+_PORTAL_BASE = "https://app.opea.com.br/pt/emissoes"
 FONTE = "opea"
+
+# EC2 full-backfill throttle for Opea only (~2790 detalhe GETs in ~2h).
+# Shared backfill SSM stays at 20 rpm for other fontes; Lambdas keep 8s / 6 rpm.
+_EC2_BACKFILL_DELAY_SECONDS = 1.5
+_EC2_BACKFILL_JITTER_SECONDS = 0.75
+_EC2_BACKFILL_MAX_RPM = 40.0
+
+
+def portal_link(codigo_opea: str) -> str:
+    """Public SPA URL for one série (``codigoOpea`` / ``id_origem``)."""
+    return f"{_PORTAL_BASE}/{(codigo_opea or '').strip()}"
 
 
 def parent_codigo_opea(codigo_opea: str) -> str:
@@ -176,6 +203,18 @@ def _enum_value(obj: Any) -> str | None:
     return str(obj).strip() or None
 
 
+def _slim_cedoc_extras(child: dict, id_cedoc: str) -> dict:
+    """Stable cedoc identity fields only — drop bulky/presigned URL blobs."""
+    extras = {
+        "id": child.get("id"),
+        "name": child.get("name"),
+        "categoryName": child.get("categoryName"),
+        "createdOn": child.get("createdOn"),
+        "idCedoc": id_cedoc,
+    }
+    return {key: value for key, value in extras.items() if value not in (None, "")}
+
+
 def serie_from_list_item(record: dict) -> SerieData | None:
     """Map one list-level série row. Requires ISIN and/or CETIP (codigoIf)."""
     codigo = (record.get("codigoOpea") or "").strip()
@@ -196,6 +235,7 @@ def serie_from_list_item(record: dict) -> SerieData | None:
         isin=isin,
         codigo_cetip=cetip,
         numero_emissao=str(numero) if numero is not None else None,
+        link=portal_link(codigo),
         operacao=pick(record, "nomeDevedor", "apelidoOperacao"),
         devedor=pick(record, "nomeDevedor"),
         tipo_ativo=pick(record, "naturezaOperacao", "classe"),
@@ -252,6 +292,7 @@ def serie_from_detail(
         numero_emissao=numero_emissao
         if numero_emissao is not None
         else (str(detail.get("emissao")) if detail.get("emissao") is not None else None),
+        link=portal_link(codigo_opea),
         operacao=pick(detail, "apelidoOperacao")
         or pick(detail.get("emissor") or {}, "descricao"),
         valor=parse_volume(detail),
@@ -272,11 +313,26 @@ class OpeaScraper(BaseScraper):
     _PAGE_SIZE = 50
 
     def __init__(self, config, context=None):
+        if os.getenv("EXECUTION_MODE", "").strip().lower() == "ec2_backfill":
+            # Source-specific override after shared backfill SSM (2s / 20 rpm).
+            config.request_delay_seconds = _EC2_BACKFILL_DELAY_SECONDS
+            config.request_jitter_seconds = _EC2_BACKFILL_JITTER_SECONDS
+            config.max_requests_per_minute = _EC2_BACKFILL_MAX_RPM
         super().__init__(config, context=context)
         # Cedoc/files is institution-wide (~18MB). Cache once per process so a
-        # full backfill does not re-download it for every série.
+        # full backfill does not re-download it for every série / parent.
         self._cedoc_children_cache: list[dict] | None = None
         self._cedoc_cache_id: str | None = None
+        self._docs_done_for_emissao: set[str] = set()
+        if os.getenv("EXECUTION_MODE", "").strip().lower() == "ec2_backfill":
+            self.logger.info(
+                "opea_ec2_backfill_throttle",
+                extra={
+                    "request_delay_seconds": config.request_delay_seconds,
+                    "request_jitter_seconds": config.request_jitter_seconds,
+                    "max_requests_per_minute": config.max_requests_per_minute,
+                },
+            )
 
     def list_series(self):
         grouped: dict[str, list[dict]] = defaultdict(list)
@@ -327,27 +383,208 @@ class OpeaScraper(BaseScraper):
                 yield mapped
 
     def fetch_detail(self, serie) -> DetailResult:
+        """Phase C: série field updates only — documents are handled in Phase B."""
         codigo = serie.id_origem
         detail = self._fetch_serie_detail(codigo)
         if not detail:
             return DetailResult(
-                serie_updates={"extras": {"detalhe_acessivel": False}},
+                serie_updates={
+                    "link": portal_link(codigo),
+                    "extras": {"detalhe_acessivel": False},
+                },
                 series=[],
                 documentos=[],
             )
 
         mapped = serie_from_detail(codigo, detail, serie.numero_emissao)
         series: list[SerieData] = [mapped] if mapped is not None else []
-        parent = serie.emissao_id or parent_codigo_opea(codigo)
         updates = self._serie_updates(serie, detail, mapped)
-        # Docs attach to all séries sharing emissao_id (resolved in scraper_base).
-        documentos = self._fetch_documents(serie, detail, parent)
-
         return DetailResult(
             serie_updates=updates,
             series=series,
-            documentos=documentos,
+            documentos=[],
         )
+
+    def _process_details(self, summary: dict) -> None:
+        """Phase B (docs once per parent) then Phase C (detalhe fields per série)."""
+        with session_scope(self.config) as session:
+            include_recheck = (
+                os.getenv("EXECUTION_MODE", "").strip().lower() != "ec2_backfill"
+            )
+            pending = select_series_para_detalhe(
+                session,
+                self.source_name,
+                limit=self.config.detail_batch_limit,
+                include_recheck=include_recheck,
+            )
+            self.logger.info(
+                "detail_queue",
+                extra={"pendentes": len(pending), "include_recheck": include_recheck},
+            )
+
+            self._process_documents_phase(session, pending, summary)
+
+            detail_started = time.monotonic()
+            for serie in pending:
+                if not self.budget.has_time():
+                    summary["interrompido_por_tempo"] = True
+                    self.logger.info(
+                        "detail_time_budget_reached",
+                        extra={"restante_ms": self.budget.remaining_ms()},
+                    )
+                    break
+                self._process_single_detail(session, serie, summary)
+
+            self.logger.info(
+                "opea_phase_detail_done",
+                extra={
+                    "detalhes_processados": summary.get("detalhes_processados", 0),
+                    "erros": summary.get("erros", 0),
+                    "elapsed_seconds": round(time.monotonic() - detail_started, 2),
+                    "interrompido_por_tempo": summary.get("interrompido_por_tempo", False),
+                },
+            )
+
+    def _process_documents_phase(self, session, pending: list, summary: dict) -> None:
+        """Phase B: filter cedoc once per distinct ``emissao_id`` in the pending queue."""
+        started = time.monotonic()
+        by_parent: dict[str, list] = defaultdict(list)
+        for serie in pending:
+            parent = serie.emissao_id or parent_codigo_opea(serie.id_origem)
+            if not parent:
+                continue
+            by_parent[parent].append(serie)
+
+        if not by_parent:
+            self.logger.info(
+                "opea_phase_docs_done",
+                extra={
+                    "parents": 0,
+                    "documentos_gravados": 0,
+                    "elapsed_seconds": 0,
+                },
+            )
+            return
+
+        id_cedoc = self._resolve_id_cedoc(pending)
+        if not id_cedoc:
+            summary["erros"] += 1
+            self.logger.warning("opea_phase_docs_no_id_cedoc")
+            return
+
+        children = self._get_cedoc_children(id_cedoc)
+        docs_before = int(summary.get("documentos_gravados") or 0)
+        parents_done = 0
+
+        for parent, members in by_parent.items():
+            if parent in self._docs_done_for_emissao:
+                continue
+            if not self.budget.has_time():
+                summary["interrompido_por_tempo"] = True
+                self.logger.info(
+                    "opea_phase_docs_time_budget_reached",
+                    extra={"restante_ms": self.budget.remaining_ms(), "parents_done": parents_done},
+                )
+                break
+
+            sample = members[0]
+            try:
+                documentos = self._documents_for_parent(sample, parent, children, id_cedoc)
+                link_ids = resolve_serie_ids_by_emissao_id(session, self.source_name, parent)
+                if not link_ids:
+                    link_ids = [s.serie_id for s in members if s.serie_id is not None]
+                for documento in documentos:
+                    if not documento.link_documento:
+                        continue
+                    doc_id = upsert_documento(session, self.source_name, documento)
+                    if doc_id is None:
+                        continue
+                    link_documento_series(session, doc_id, link_ids)
+                    summary["documentos_gravados"] += 1
+                session.commit()
+                self._docs_done_for_emissao.add(parent)
+                parents_done += 1
+            except Exception as exc:
+                session.rollback()
+                summary["erros"] += 1
+                self.logger.warning(
+                    "opea_phase_docs_parent_error",
+                    extra={"emissao_id": parent, "error": str(exc)},
+                )
+
+        self.logger.info(
+            "opea_phase_docs_done",
+            extra={
+                "parents": len(by_parent),
+                "parents_done": parents_done,
+                "documentos_gravados": int(summary.get("documentos_gravados") or 0) - docs_before,
+                "cedoc_children": len(children),
+                "id_cedoc": id_cedoc,
+                "elapsed_seconds": round(time.monotonic() - started, 2),
+                "interrompido_por_tempo": summary.get("interrompido_por_tempo", False),
+            },
+        )
+
+    def _resolve_id_cedoc(self, pending: list) -> str | None:
+        """Prefer stored extras.idCedoc; otherwise one live detalhe from the queue."""
+        for serie in pending:
+            extras = serie.extras if isinstance(serie.extras, dict) else {}
+            if extras.get("idCedoc"):
+                return str(extras["idCedoc"])
+
+        for serie in pending:
+            if not self.budget.has_time():
+                break
+            detail = self._fetch_serie_detail(serie.id_origem)
+            id_cedoc = detail.get("idCedoc") if detail else None
+            if id_cedoc:
+                return str(id_cedoc)
+        return None
+
+    def _documents_for_parent(
+        self,
+        sample,
+        parent: str,
+        children: list[dict],
+        id_cedoc: str,
+    ) -> list[DocumentoData]:
+        emission_code = emission_file_code(sample.numero_emissao)
+        natureza = None
+        if isinstance(sample.extras, dict):
+            natureza = sample.extras.get("natureza")
+        natureza = natureza or natureza_from_parent(parent)
+        vehicle = vehicle_from_parent(parent)
+        if not emission_code:
+            return []
+
+        docs: list[DocumentoData] = []
+        seen_ids: set[str] = set()
+        for child in children:
+            name = child.get("name") or ""
+            if not document_matches_emission(name, natureza, emission_code, vehicle):
+                continue
+            url = child.get("url")
+            if not url:
+                continue
+            file_id = opea_file_id(child)
+            if file_id and file_id in seen_ids:
+                continue
+            if file_id:
+                seen_ids.add(file_id)
+            docs.append(
+                DocumentoData(
+                    link_documento=normalize_opea_document_url(url),
+                    titulo=name,
+                    tipo_documento=child.get("categoryName"),
+                    data_documento=parse_br_date(str(child.get("createdOn") or "")[:10]),
+                    numero_emissao=sample.numero_emissao,
+                    codigo_cetip=sample.codigo_cetip,
+                    emissao_id=parent,
+                    id_origem_arquivo=file_id,
+                    extras=_slim_cedoc_extras(child, id_cedoc),
+                )
+            )
+        return docs
 
     def _fetch_serie_detail(self, codigo_opea: str) -> dict:
         try:
@@ -361,7 +598,9 @@ class OpeaScraper(BaseScraper):
             return {}
 
     def _serie_updates(self, serie, detail: dict, mapped: SerieData | None) -> dict:
+        codigo = serie.id_origem
         updates: dict = {
+            "link": portal_link(codigo),
             "extras": {
                 "detalhe_acessivel": bool(detail),
                 "natureza": (serie.extras or {}).get("natureza")
@@ -374,7 +613,7 @@ class OpeaScraper(BaseScraper):
                 "oferta": pick(detail.get("tipoOferta") or {}, "raw", "value"),
                 "emissor": pick(detail.get("emissor") or {}, "descricao"),
                 "apelido_operacao": detail.get("apelidoOperacao"),
-            }
+            },
         }
         if mapped:
             updates.update(
@@ -389,6 +628,7 @@ class OpeaScraper(BaseScraper):
                     "data_vencimento": mapped.data_vencimento,
                     "quantidade": mapped.quantidade,
                     "operacao": mapped.operacao or serie.operacao,
+                    "link": mapped.link or portal_link(codigo),
                 }
             )
         updates["extras"] = {
@@ -435,45 +675,9 @@ class OpeaScraper(BaseScraper):
         detail: dict,
         parent: str,
     ) -> list[DocumentoData]:
-        """Filter cached cedoc children; attach to all séries sharing ``emissao_id``."""
+        """Build docs for one parent (used by repair tooling; Phase B uses ``_documents_for_parent``)."""
         id_cedoc = detail.get("idCedoc")
         if not id_cedoc:
             return []
-        emission_code = emission_file_code(serie.numero_emissao)
-        natureza = None
-        if isinstance(serie.extras, dict):
-            natureza = serie.extras.get("natureza")
-        natureza = natureza or natureza_from_parent(parent)
-        vehicle = vehicle_from_parent(parent)
-        if not emission_code:
-            return []
-
         children = self._get_cedoc_children(str(id_cedoc))
-        docs: list[DocumentoData] = []
-        seen_ids: set[str] = set()
-        for child in children:
-            name = child.get("name") or ""
-            if not document_matches_emission(name, natureza, emission_code, vehicle):
-                continue
-            url = child.get("url")
-            if not url:
-                continue
-            file_id = opea_file_id(child)
-            if file_id and file_id in seen_ids:
-                continue
-            if file_id:
-                seen_ids.add(file_id)
-            docs.append(
-                DocumentoData(
-                    link_documento=normalize_opea_document_url(url),
-                    titulo=name,
-                    tipo_documento=child.get("categoryName"),
-                    data_documento=parse_br_date(str(child.get("createdOn") or "")[:10]),
-                    numero_emissao=serie.numero_emissao,
-                    codigo_cetip=serie.codigo_cetip,
-                    emissao_id=parent,
-                    id_origem_arquivo=file_id,
-                    extras={**child, "idCedoc": id_cedoc},
-                )
-            )
-        return docs
+        return self._documents_for_parent(serie, parent, children, str(id_cedoc))
