@@ -63,6 +63,9 @@ export MAX_REQUESTS_PER_MINUTE="${MAX_REQUESTS_PER_MINUTE:-10}"
 export REQUEST_DELAY_SECONDS="${REQUEST_DELAY_SECONDS:-6}"
 export REQUEST_JITTER_SECONDS="${REQUEST_JITTER_SECONDS:-1}"
 export RUN_ID="${RUN_ID:-$(uuidgen)}"
+# Ensure scraper JSON logs hit the file before teardown kills the instance.
+export PYTHONUNBUFFERED=1
+export PYTHONFAULTHANDLER=1
 
 # Optional override from instance tag agenda_input.
 if [[ -z "${AGENDA_INPUT_SET:-}" ]]; then
@@ -90,7 +93,7 @@ if [[ ! -f "${INPUT_PATH}" ]]; then
 fi
 
 set +e
-timeout "${AGENDA_MAX_SECONDS}s" python3.12 scripts/run_anbima_agenda.py \
+timeout "${AGENDA_MAX_SECONDS}s" python3.12 -u scripts/run_anbima_agenda.py \
   --input "${INPUT_PATH}" \
   --create-schema \
   | tee "${LOG_DIR}/run.log"
@@ -98,6 +101,9 @@ run_status=$?
 set -e
 
 echo "agenda_run_exit_status=${run_status} $(date -Is)"
+sync
+# Give the CloudWatch agent a moment to upload the final lines before terminate.
+sleep 20
 
 bash "${INSTALL_ROOT}/scripts/ec2_agenda_teardown.sh"
 echo "agenda_bootstrap_done $(date -Is)"

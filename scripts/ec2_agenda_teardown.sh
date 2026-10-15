@@ -13,6 +13,8 @@ AZ=$(meta placement/availability-zone)
 REGION="${AWS_REGION:-${AZ::-1}}"
 
 echo "teardown_start instance_id=${INSTANCE_ID} region=${REGION} $(date -Is)"
+sync
+sleep 5
 
 ROOT_DEVICE=$(aws ec2 describe-instances \
   --region "${REGION}" \
