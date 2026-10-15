@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from shared.models import Documento, DocumentoSerie, Serie
+from shared.models import AgendaEvento, Documento, DocumentoSerie, Serie
 
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
@@ -440,6 +440,53 @@ def get_serie(session: Session, serie_id: int) -> dict | None:
             }
             for documento in doc_rows
         ],
+    }
+
+
+def list_agenda(
+    session: Session,
+    *,
+    codigo_cetip: str | None = None,
+    limit: int = DEFAULT_LIMIT,
+    offset: int = 0,
+) -> dict:
+    """List agenda payment events newest-first by ``data_evento``."""
+    limit = min(max(limit, 1), MAX_LIMIT)
+    offset = max(offset, 0)
+
+    base = select(AgendaEvento)
+    if codigo_cetip:
+        base = base.where(AgendaEvento.codigo_cetip.ilike(f"%{codigo_cetip}%"))
+
+    total = session.scalar(select(func.count()).select_from(base.subquery())) or 0
+    rows = session.scalars(
+        base.order_by(
+            AgendaEvento.data_evento.desc().nulls_last(),
+            AgendaEvento.agenda_id.desc(),
+        )
+        .limit(limit)
+        .offset(offset)
+    ).all()
+
+    items = [
+        {
+            "id": row.agenda_id,
+            "codigo_cetip": row.codigo_cetip,
+            "data_evento": _as_iso(row.data_evento),
+            "data_liquidacao": _as_iso(row.data_liquidacao),
+            "tipo_evento": row.tipo_evento,
+            "taxa": row.taxa,
+            "valor_pago": row.valor_pago,
+            "status": row.status,
+        }
+        for row in rows
+    ]
+    return {
+        "items": items,
+        "total": int(total),
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(items) < int(total),
     }
 
 

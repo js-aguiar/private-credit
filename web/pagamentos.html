@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pagamentos</title>
+    <link rel="stylesheet" href="styles.css?v=20261015" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true"></span>
+        <div>
+          <h1>Pagamentos</h1>
+          <p>ANBIMA agenda payment events</p>
+        </div>
+      </div>
+      <div class="topbar-aside">
+        <nav class="site-nav" aria-label="Catalog sections">
+          <a href="/">Séries</a>
+          <a href="/documentos">Documentos</a>
+          <a class="active" href="/pagamentos">Pagamentos</a>
+        </nav>
+        <p class="count" id="result-count">Loading…</p>
+      </div>
+    </header>
+
+    <main>
+      <form class="filters filters-pagamentos" id="filters" autocomplete="off">
+        <label>
+          <span>Código B3</span>
+          <input
+            id="filter-cetip"
+            name="cetip"
+            placeholder="e.g. ELET14"
+            spellcheck="false"
+          />
+        </label>
+        <div class="filter-actions">
+          <button type="submit">Filter</button>
+          <button type="button" class="ghost" id="reset-filters">Clear</button>
+        </div>
+      </form>
+
+      <section class="list-card table-card" aria-live="polite">
+        <div class="table-wrap">
+          <table class="data-table agenda-table">
+            <thead>
+              <tr>
+                <th scope="col">Código B3</th>
+                <th scope="col">Data do evento</th>
+                <th scope="col">Data de liquidação</th>
+                <th scope="col">Evento</th>
+                <th scope="col" class="num">Taxa</th>
+                <th scope="col" class="num">Valor pago</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody id="agenda-body"></tbody>
+          </table>
+        </div>
+        <p class="status" id="status" hidden></p>
+        <button type="button" class="load-more" id="load-more" hidden>Load more</button>
+      </section>
+    </main>
+
+    <script src="pagamentos.js?v=20261015" type="module"></script>
+  </body>
+</html>

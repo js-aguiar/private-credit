@@ -15,6 +15,7 @@ from queries import (
     DEFAULT_LIMIT,
     get_document,
     get_serie,
+    list_agenda,
     list_documents,
     list_filters,
     list_series,
@@ -37,6 +38,7 @@ _SERIE_LIST = re.compile(r"^/api/series/?$")
 _EMISSAO_FILTERS = re.compile(r"^/api/emissoes/filters/?$")
 _EMISSAO_DETAIL = re.compile(r"^/api/emissoes/(\d+)/?$")
 _EMISSAO_LIST = re.compile(r"^/api/emissoes/?$")
+_AGENDA_LIST = re.compile(r"^/api/agenda/?$")
 
 _CORS_HEADERS = {
     "access-control-allow-origin": "*",
@@ -95,6 +97,10 @@ def handler(event, context):
             params = _list_params(query)
             with session_scope(config) as session:
                 return _response(200, list_documents(session, **params))
+        if _AGENDA_LIST.match(path):
+            params = _agenda_list_params(query)
+            with session_scope(config) as session:
+                return _response(200, list_agenda(session, **params))
         return _response(404, {"error": "not_found"})
     except ValueError as exc:
         logger.warning("bad_request", extra={"error": str(exc), "path": path})
@@ -135,6 +141,14 @@ def _serie_list_params(query: dict[str, str]) -> dict:
         "company": _opt_str(query.get("company") or query.get("devedor")),
         "cetip": _opt_str(query.get("cetip")),
         "isin": _opt_str(query.get("isin")),
+        "limit": _opt_int(query.get("limit"), DEFAULT_LIMIT),
+        "offset": _opt_int(query.get("offset"), 0),
+    }
+
+
+def _agenda_list_params(query: dict[str, str]) -> dict:
+    return {
+        "codigo_cetip": _opt_str(query.get("cetip") or query.get("codigo_cetip")),
         "limit": _opt_int(query.get("limit"), DEFAULT_LIMIT),
         "offset": _opt_int(query.get("offset"), 0),
     }
