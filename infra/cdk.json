@@ -11,6 +11,8 @@
     "schedule_stagger_minutes": 5,
     "backfill_instance_type": "t4g.small",
     "backfill_max_hours": 24,
+    "agenda_instance_type": "t4g.small",
+    "agenda_max_hours": 24,
     "backfill_request_delay_seconds": "2",
     "backfill_request_jitter_seconds": "1",
     "backfill_max_requests_per_minute": "20",

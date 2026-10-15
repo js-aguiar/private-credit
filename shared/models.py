@@ -158,3 +158,39 @@ class DocumentoSerie(Base):
     serie: Mapped["Serie"] = relationship(back_populates="documento_links")
 
     __table_args__ = (Index("ix_documentos_series_serie_id", "serie_id"),)
+
+
+class AgendaEvento(Base):
+    """One ANBIMA agenda event row for a CETIP code (debenture / CRI / CRA)."""
+
+    __tablename__ = "agenda"
+
+    agenda_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    codigo_cetip: Mapped[str] = mapped_column(String(30), nullable=False)
+    data_evento: Mapped[date | None] = mapped_column(Date)
+    data_liquidacao: Mapped[date | None] = mapped_column(Date)
+    tipo_evento: Mapped[str | None] = mapped_column(Text)
+    taxa: Mapped[str | None] = mapped_column(Text)
+    valor_pago: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str | None] = mapped_column(Text)
+
+    criado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "codigo_cetip",
+            "data_evento",
+            "data_liquidacao",
+            "tipo_evento",
+            "taxa",
+            "valor_pago",
+            "status",
+            name="uq_agenda_natural",
+        ),
+        Index("ix_agenda_codigo_cetip", "codigo_cetip"),
+    )
