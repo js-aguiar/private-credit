@@ -92,3 +92,22 @@ CREATE TABLE IF NOT EXISTS isin_contestados (
     fonte        VARCHAR(64),
     detectado_em TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ANBIMA Data agenda de eventos (debentures / CRI / CRA), keyed by CETIP.
+CREATE TABLE IF NOT EXISTS agenda (
+    agenda_id        BIGSERIAL PRIMARY KEY,
+    codigo_cetip     VARCHAR(30) NOT NULL,
+    data_evento      DATE,
+    data_liquidacao  DATE,
+    tipo_evento      TEXT,
+    taxa             TEXT,
+    valor_pago       TEXT,
+    status           TEXT,
+    criado_em        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    atualizado_em    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_agenda_natural UNIQUE (
+        codigo_cetip, data_evento, data_liquidacao, tipo_evento, taxa, valor_pago, status
+    )
+);
+
+CREATE INDEX IF NOT EXISTS ix_agenda_codigo_cetip ON agenda (codigo_cetip);
