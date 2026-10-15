@@ -525,7 +525,7 @@ class OpeaScraper(BaseScraper):
             },
         )
 
-    def _resolve_id_cedoc(self, session, pending: list) -> str | None:
+    def _resolve_id_cedoc(self, pending: list) -> str | None:
         """Prefer stored extras.idCedoc; otherwise one live detalhe from the queue."""
         for serie in pending:
             extras = serie.extras if isinstance(serie.extras, dict) else {}
