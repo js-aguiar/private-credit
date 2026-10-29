@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """AWS CDK application entrypoint.
 
-Provisions the scraping infrastructure across seven stacks:
-  - network     : VPC + low-cost NAT instance
-  - database    : RDS PostgreSQL (db.t4g.micro, single-AZ, private)
-  - scrapers    : five Lambda container functions + IAM + SSM tunables
-  - backfill    : EC2 launch template for one-off full backfill runs
-  - schedule    : EventBridge Scheduler (10:00 and 18:00 America/Sao_Paulo)
-  - web         : S3 + CloudFront catalog UI and read-only VPC Lambda API
-  - monitoring  : CloudWatch alarms + SNS alerts
+Provisions the scraping infrastructure across eight stacks:
+  - network           : VPC + low-cost NAT instance
+  - database          : RDS PostgreSQL (db.t4g.micro, single-AZ, private)
+  - scrapers          : five Lambda container functions + IAM + SSM tunables
+  - backfill          : EC2 launch template for one-off full backfill runs
+  - caracteristicas   : EC2 launch template for one-off ANBIMA características scrapes
+  - schedule          : EventBridge Scheduler (10:00 and 18:00 America/Sao_Paulo)
+  - web               : S3 + CloudFront catalog UI and read-only VPC Lambda API
+  - monitoring        : CloudWatch alarms + SNS alerts
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import os
 import aws_cdk as cdk
 
 from stacks.backfill_stack import BackfillStack
+from stacks.caracteristicas_stack import CaracteristicasStack
 from stacks.database_stack import DatabaseStack
 from stacks.monitoring_stack import MonitoringStack
 from stacks.network_stack import NetworkStack
@@ -60,6 +62,10 @@ schedules_enabled = _context_bool(app, "schedules_enabled", True)
 schedule_stagger_minutes = _context_int(app, "schedule_stagger_minutes", 5)
 backfill_instance_type = _context_str(app, "backfill_instance_type", "t4g.small")
 backfill_max_hours = _context_int(app, "backfill_max_hours", 24)
+caracteristicas_instance_type = _context_str(
+    app, "caracteristicas_instance_type", "t4g.small"
+)
+caracteristicas_max_hours = _context_int(app, "caracteristicas_max_hours", 24)
 
 env = cdk.Environment(
     account=os.getenv("CDK_DEFAULT_ACCOUNT"),
@@ -87,6 +93,17 @@ BackfillStack(
     database=database,
     backfill_instance_type=backfill_instance_type,
     backfill_max_hours=backfill_max_hours,
+    env=env,
+)
+
+CaracteristicasStack(
+    app,
+    f"{prefix}-caracteristicas",
+    prefix=prefix,
+    vpc=network.vpc,
+    database=database,
+    caracteristicas_instance_type=caracteristicas_instance_type,
+    caracteristicas_max_hours=caracteristicas_max_hours,
     env=env,
 )
 
