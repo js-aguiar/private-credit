@@ -214,20 +214,30 @@ def parse_caracteristicas_payload(
         _pick(data, ("numero_emissao", "numeroEmissao"))
     )
 
-    empresa = (
-        _as_text(emissor_obj.get("nome"))
-        or _as_text(emissor_obj.get("razao_social"))
-        or _as_text(data.get("devedor") if not isinstance(data.get("devedor"), dict) else None)
-        or _as_text(_nested_dict(data, "devedor").get("nome"))
-        or _as_text(securitizadora_obj.get("nome"))
-        or _as_text(_pick(data, _FIELD_ALIASES["empresa"]))
-    )
-    cnpj = (
-        _as_text(emissor_obj.get("cnpj"))
-        or _as_text(_nested_dict(data, "devedor").get("cnpj"))
-        or _as_text(securitizadora_obj.get("cnpj"))
-        or _as_text(_pick(data, _FIELD_ALIASES["cnpj"]))
-    )
+    # Debenture: company = emissor. CRI/CRA: company = devedor (plan default).
+    if tipo == "debenture":
+        empresa = (
+            _as_text(emissor_obj.get("nome"))
+            or _as_text(emissor_obj.get("razao_social"))
+            or _as_text(_pick(data, _FIELD_ALIASES["empresa"]))
+        )
+        cnpj = _as_text(emissor_obj.get("cnpj")) or _as_text(
+            _pick(data, _FIELD_ALIASES["cnpj"])
+        )
+    else:
+        empresa = (
+            _as_text(data.get("devedor") if not isinstance(data.get("devedor"), dict) else None)
+            or _as_text(_nested_dict(data, "devedor").get("nome"))
+            or _as_text(emissor_obj.get("nome"))
+            or _as_text(securitizadora_obj.get("nome"))
+            or _as_text(_pick(data, _FIELD_ALIASES["empresa"]))
+        )
+        cnpj = (
+            _as_text(_nested_dict(data, "devedor").get("cnpj"))
+            or _as_text(emissor_obj.get("cnpj"))
+            or _as_text(securitizadora_obj.get("cnpj"))
+            or _as_text(_pick(data, _FIELD_ALIASES["cnpj"]))
+        )
     garantia = _as_text(emissao_obj.get("garantia")) or _as_text(
         _pick(data, _FIELD_ALIASES["garantia"])
     )
