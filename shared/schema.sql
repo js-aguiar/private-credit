@@ -92,3 +92,32 @@ CREATE TABLE IF NOT EXISTS isin_contestados (
     fonte        VARCHAR(64),
     detectado_em TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ANBIMA Data características (one row per CETIP).
+CREATE TABLE IF NOT EXISTS series_anbima (
+    series_anbima_id          BIGSERIAL PRIMARY KEY,
+    codigo_cetip              VARCHAR(30) NOT NULL,
+    tipo                      VARCHAR(20) NOT NULL,
+    serie                     TEXT,
+    remuneracao               TEXT,
+    data_inicio_rentabilidade DATE,
+    quantidade_serie_emissao  TEXT,
+    volume_serie_emissao      TEXT,
+    vne                       TEXT,
+    quantidade_mercado_b3     TEXT,
+    data_emissao              DATE,
+    data_vencimento           DATE,
+    isin                      VARCHAR(20),
+    lei_12431                 TEXT,
+    emissao                   TEXT,
+    empresa                   TEXT,
+    setor                     TEXT,
+    cnpj                      TEXT,
+    garantia                  TEXT,
+    extras                    JSONB NOT NULL DEFAULT '{}'::jsonb,
+    criado_em                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    atualizado_em             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_series_anbima_cetip UNIQUE (codigo_cetip)
+);
+
+CREATE INDEX IF NOT EXISTS ix_series_anbima_tipo ON series_anbima (tipo);

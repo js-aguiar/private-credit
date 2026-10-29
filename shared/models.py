@@ -158,3 +158,44 @@ class DocumentoSerie(Base):
     serie: Mapped["Serie"] = relationship(back_populates="documento_links")
 
     __table_args__ = (Index("ix_documentos_series_serie_id", "serie_id"),)
+
+
+class SerieAnbima(Base):
+    """One ANBIMA características row for a CETIP code (debenture / CRI / CRA)."""
+
+    __tablename__ = "series_anbima"
+
+    series_anbima_id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=True
+    )
+    codigo_cetip: Mapped[str] = mapped_column(String(30), nullable=False)
+    tipo: Mapped[str] = mapped_column(String(20), nullable=False)
+    serie: Mapped[str | None] = mapped_column(Text)
+    remuneracao: Mapped[str | None] = mapped_column(Text)
+    data_inicio_rentabilidade: Mapped[date | None] = mapped_column(Date)
+    quantidade_serie_emissao: Mapped[str | None] = mapped_column(Text)
+    volume_serie_emissao: Mapped[str | None] = mapped_column(Text)
+    vne: Mapped[str | None] = mapped_column(Text)
+    quantidade_mercado_b3: Mapped[str | None] = mapped_column(Text)
+    data_emissao: Mapped[date | None] = mapped_column(Date)
+    data_vencimento: Mapped[date | None] = mapped_column(Date)
+    isin: Mapped[str | None] = mapped_column(String(20))
+    lei_12431: Mapped[str | None] = mapped_column(Text)
+    emissao: Mapped[str | None] = mapped_column(Text)
+    empresa: Mapped[str | None] = mapped_column(Text)
+    setor: Mapped[str | None] = mapped_column(Text)
+    cnpj: Mapped[str | None] = mapped_column(Text)
+    garantia: Mapped[str | None] = mapped_column(Text)
+    extras: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    criado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("codigo_cetip", name="uq_series_anbima_cetip"),
+        Index("ix_series_anbima_tipo", "tipo"),
+    )
