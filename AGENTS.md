@@ -57,11 +57,15 @@ fails against a plain local Postgres.
 - Max runtime: 24h (`backfill_max_hours` CDK context); instance self-terminates and deletes EBS.
 - Incomplete backfill is OK — twice-daily Lambdas drain remaining `detalhes_coletados=false` rows.
 
-### Public catalog (S3 + CloudFront + VPC Lambda)
+### Catalog (S3 + CloudFront + VPC Lambda, Basic Auth)
 - Stack: `br-sec-scrapers-web`. Deploy with `cd infra && cdk deploy br-sec-scrapers-web`.
 - CatalogUrl output is the CDN base. **`/` is Séries** (list/detail + company/CETIP/ISIN filters);
  **`/documentos` is the documents catalog** (CloudFront Function rewrites to `documentos.html` —
  without that rewrite, SPA 403/404 fallback would serve the séries `index.html`).
+- **Auth:** HTTP Basic Auth on all CloudFront behaviors; catalog Lambda repeats the same check
+  (blocks direct execute-api). Defaults `admin` / CDK context `catalog_basic_password` (override
+  with `catalog_basic_user` / `catalog_basic_password`). Local API uses `CATALOG_BASIC_USER` /
+  `CATALOG_BASIC_PASSWORD` (same defaults).
 - API: `/api/series`, `/api/series/{id}`, `/api/series/filters`, plus existing `/api/documents*`.
   Legacy `/api/emissoes*` routes still resolve to the series handlers.
 - Local: serve `web/` static files and run `python web/api/local.py` (see `web/api/local.py`).
