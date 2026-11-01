@@ -1,12 +1,16 @@
 """AWS Lambda entrypoint for the read-only catalog API.
 
 Handles API Gateway HTTP API (payload v2) events. SQL is SELECT-only; the browser
-never receives database credentials.
+never receives database credentials. HTTP Basic Auth (same credentials as CloudFront)
+blocks direct execute-api access.
 """
 
 from __future__ import annotations
 
+import base64
+import hmac
 import json
+import os
 import re
 from datetime import date
 from urllib.parse import parse_qs
@@ -38,10 +42,13 @@ _EMISSAO_FILTERS = re.compile(r"^/api/emissoes/filters/?$")
 _EMISSAO_DETAIL = re.compile(r"^/api/emissoes/(\d+)/?$")
 _EMISSAO_LIST = re.compile(r"^/api/emissoes/?$")
 
+_DEFAULT_BASIC_USER = "admin"
+_DEFAULT_BASIC_PASSWORD = "cloudf@990055"
+
 _CORS_HEADERS = {
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,OPTIONS",
-    "access-control-allow-headers": "content-type",
+    "access-control-allow-headers": "content-type,authorization",
 }
 
 
@@ -52,6 +59,9 @@ def handler(event, context):
 
     if method == "OPTIONS":
         return _response(204, None)
+
+    if not _is_authorized(event):
+        return _unauthorized()
 
     if method != "GET":
         return _response(405, {"error": "method_not_allowed"})
@@ -102,6 +112,59 @@ def handler(event, context):
     except Exception:
         logger.exception("catalog_error", extra={"path": path})
         return _response(500, {"error": "internal_error"})
+
+
+def _basic_credentials() -> tuple[str, str]:
+    user = os.environ.get("CATALOG_BASIC_USER") or _DEFAULT_BASIC_USER
+    password = os.environ.get("CATALOG_BASIC_PASSWORD") or _DEFAULT_BASIC_PASSWORD
+    return user, password
+
+
+def _header(event: dict, name: str) -> str | None:
+    headers = event.get("headers") or {}
+    if not isinstance(headers, dict):
+        return None
+    lower = name.lower()
+    for key, value in headers.items():
+        if str(key).lower() == lower:
+            if isinstance(value, list):
+                return value[0] if value else None
+            return value
+    return None
+
+
+def _is_authorized(event: dict) -> bool:
+    expected_user, expected_password = _basic_credentials()
+    raw = _header(event, "authorization")
+    if not raw:
+        return False
+    scheme, _, token = raw.strip().partition(" ")
+    if scheme.lower() != "basic" or not token:
+        return False
+    try:
+        decoded = base64.b64decode(token.encode("ascii"), validate=True).decode("utf-8")
+    except (ValueError, UnicodeError):
+        return False
+    user, sep, password = decoded.partition(":")
+    if not sep:
+        return False
+    return hmac.compare_digest(user, expected_user) and hmac.compare_digest(
+        password, expected_password
+    )
+
+
+def _unauthorized() -> dict:
+    headers = {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "www-authenticate": 'Basic realm="Catalog"',
+        **_CORS_HEADERS,
+    }
+    return {
+        "statusCode": 401,
+        "headers": headers,
+        "body": json.dumps({"error": "unauthorized"}, ensure_ascii=False),
+    }
 
 
 def _parse_event(event: dict) -> tuple[str, str, dict[str, str]]:

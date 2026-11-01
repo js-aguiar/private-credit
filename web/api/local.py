@@ -50,11 +50,14 @@ class CatalogHandler(BaseHTTPRequestHandler):
 
 def _event(request: BaseHTTPRequestHandler, method: str) -> dict:
     parsed = urlparse(request.path)
+    # Forward Authorization so local Basic Auth matches the Lambda handler.
+    headers = {key.lower(): value for key, value in request.headers.items()}
     return {
         "requestContext": {"http": {"method": method, "path": parsed.path}},
         "rawPath": parsed.path,
         "rawQueryString": parsed.query,
         "queryStringParameters": None,
+        "headers": headers,
     }
 
 

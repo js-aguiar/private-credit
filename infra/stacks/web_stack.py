@@ -1,13 +1,17 @@
-"""Public document catalog: S3 + CloudFront UI and a VPC Lambda API.
+"""Document catalog: S3 + CloudFront UI and a VPC Lambda API (HTTP Basic Auth).
 
 The static site never receives database credentials. CloudFront serves HTML/CSS/JS from a
 private S3 bucket (Origin Access Control) and proxies ``/api/*`` to API Gateway HTTP API,
 which invokes a read-only Lambda in private-with-egress subnets. That Lambda reads RDS
 credentials from Secrets Manager and connects with TLS (``sslmode=require``).
+
+A CloudFront Function enforces HTTP Basic Auth on all viewer requests; the Lambda repeats
+the same check so the public execute-api URL cannot bypass the CDN.
 """
 
 from __future__ import annotations
 
+import base64
 import pathlib
 
 from aws_cdk import CfnOutput, Duration, Fn, RemovalPolicy, Stack
@@ -25,6 +29,38 @@ from constructs import Construct
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 WEB_DIR = REPO_ROOT / "web"
 
+_DEFAULT_BASIC_USER = "admin"
+_DEFAULT_BASIC_PASSWORD = "cloudf@990055"
+
+
+def _catalog_viewer_auth_function_code(*, username: str, password: str) -> str:
+    """CloudFront Function: Basic Auth + /documentos path rewrite."""
+    token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+    # Keep the expected header value as a plain string literal (no template injection).
+    expected = f"Basic {token}".replace("\\", "\\\\").replace("'", "\\'")
+    return f"""
+function handler(event) {{
+  var request = event.request;
+  var headers = request.headers;
+  var expected = '{expected}';
+  var auth = headers.authorization;
+  if (!auth || auth.value !== expected) {{
+    return {{
+      statusCode: 401,
+      statusDescription: 'Unauthorized',
+      headers: {{
+        'www-authenticate': {{ value: 'Basic realm="Catalog"' }}
+      }}
+    }};
+  }}
+  var uri = request.uri;
+  if (uri === '/documentos' || uri === '/documentos/') {{
+    request.uri = '/documentos.html';
+  }}
+  return request;
+}}
+"""
+
 
 class WebStack(Stack):
     def __init__(
@@ -38,6 +74,13 @@ class WebStack(Stack):
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
+
+        basic_user = (
+            self.node.try_get_context("catalog_basic_user") or _DEFAULT_BASIC_USER
+        )
+        basic_password = (
+            self.node.try_get_context("catalog_basic_password") or _DEFAULT_BASIC_PASSWORD
+        )
 
         api_sg = ec2.SecurityGroup(
             self,
@@ -76,6 +119,8 @@ class WebStack(Stack):
                 "DB_SSLMODE": "require",
                 "AUTO_CREATE_SCHEMA": "false",
                 "LOG_LEVEL": "INFO",
+                "CATALOG_BASIC_USER": str(basic_user),
+                "CATALOG_BASIC_PASSWORD": str(basic_password),
             },
             log_retention=logs.RetentionDays.ONE_MONTH,
         )
@@ -85,7 +130,7 @@ class WebStack(Stack):
             self,
             "CatalogHttpApi",
             api_name=f"{prefix}-catalog",
-            description="Read-only document catalog API",
+            description="Read-only document catalog API (Basic Auth)",
         )
         integration = apigwv2_integrations.HttpLambdaIntegration(
             "CatalogIntegration", api_fn
@@ -100,7 +145,7 @@ class WebStack(Stack):
             methods=[apigwv2.HttpMethod.GET, apigwv2.HttpMethod.OPTIONS],
             integration=integration,
         )
-        # Keep a public catalog from flooding the shared t4g.micro RDS.
+        # Keep authenticated catalog traffic from flooding the shared t4g.micro RDS.
         cfn_stage = http_api.default_stage.node.default_child
         cfn_stage.add_property_override(
             "DefaultRouteSettings",
@@ -122,24 +167,17 @@ class WebStack(Stack):
             protocol_policy=cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
         )
 
-        # Clean /documentos path → static file (default_root_object only covers /).
-        documentos_rewrite = cloudfront.Function(
+        # Basic Auth on every viewer request; also rewrite /documentos → documentos.html.
+        viewer_auth = cloudfront.Function(
             self,
-            "DocumentosPathRewrite",
+            "CatalogViewerAuth",
             code=cloudfront.FunctionCode.from_inline(
-                """
-function handler(event) {
-  var request = event.request;
-  var uri = request.uri;
-  if (uri === '/documentos' || uri === '/documentos/') {
-    request.uri = '/documentos.html';
-  }
-  return request;
-}
-"""
+                _catalog_viewer_auth_function_code(
+                    username=str(basic_user),
+                    password=str(basic_password),
+                )
             ),
         )
-
         distribution = cloudfront.Distribution(
             self,
             "CatalogCdn",
@@ -150,7 +188,7 @@ function handler(event) {
                 cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
                 function_associations=[
                     cloudfront.FunctionAssociation(
-                        function=documentos_rewrite,
+                        function=viewer_auth,
                         event_type=cloudfront.FunctionEventType.VIEWER_REQUEST,
                     )
                 ],
@@ -162,6 +200,12 @@ function handler(event) {
                     allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
                     cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
                     origin_request_policy=cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+                    function_associations=[
+                        cloudfront.FunctionAssociation(
+                            function=viewer_auth,
+                            event_type=cloudfront.FunctionEventType.VIEWER_REQUEST,
+                        )
+                    ],
                 ),
             },
             error_responses=[
