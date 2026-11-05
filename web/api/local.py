@@ -3,7 +3,7 @@
 
     python web/api/local.py
 
-Serves GET /api/* on 127.0.0.1:8081. Point the static UI at this origin when
+Serves /api/* on 127.0.0.1:8081. Point the static UI at this origin when
 developing with ``python -m http.server --directory web``.
 """
 
@@ -33,6 +33,15 @@ class CatalogHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         self._write(handler(_event(self, "GET"), None))
 
+    def do_POST(self) -> None:  # noqa: N802
+        self._write(handler(_event(self, "POST"), None))
+
+    def do_PATCH(self) -> None:  # noqa: N802
+        self._write(handler(_event(self, "PATCH"), None))
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        self._write(handler(_event(self, "DELETE"), None))
+
     def log_message(self, fmt: str, *args) -> None:
         sys.stderr.write(f"{self.address_string()} - {fmt % args}\n")
 
@@ -50,11 +59,17 @@ class CatalogHandler(BaseHTTPRequestHandler):
 
 def _event(request: BaseHTTPRequestHandler, method: str) -> dict:
     parsed = urlparse(request.path)
+    length = int(request.headers.get("Content-Length") or 0)
+    raw_body = request.rfile.read(length) if length > 0 else b""
+    headers = {key: value for key, value in request.headers.items()}
     return {
         "requestContext": {"http": {"method": method, "path": parsed.path}},
         "rawPath": parsed.path,
         "rawQueryString": parsed.query,
         "queryStringParameters": None,
+        "headers": headers,
+        "body": raw_body.decode("utf-8") if raw_body else None,
+        "isBase64Encoded": False,
     }
 
 
@@ -64,7 +79,12 @@ def main() -> int:
         json.dumps(
             {
                 "listening": f"http://{HOST}:{PORT}",
-                "paths": ["/api/filters", "/api/documents"],
+                "paths": [
+                    "/api/filters",
+                    "/api/documents",
+                    "/api/series",
+                    "/api/portfolios",
+                ],
             }
         )
     )

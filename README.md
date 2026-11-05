@@ -124,8 +124,11 @@ API + VPC Lambda).
 The catalog URL is the `CatalogUrl` CloudFormation output
 (`https://<distribution>.cloudfront.net`). The browser never talks to RDS: CloudFront
 serves the static UI and proxies `/api/*` to a read-only Lambda that connects to
-Postgres over TLS (`DB_SSLMODE=require`) using Secrets Manager. The site is public
-and SELECT-only.
+Postgres over TLS (`DB_SSLMODE=require`) using Secrets Manager. Access is gated with
+**HTTP Basic Auth** (CloudFront Function + the same check in the catalog Lambda so the
+execute-api URL cannot be bypassed). Defaults: user `admin`, password from CDK context
+`catalog_basic_password` (override with `catalog_basic_user` / `catalog_basic_password`).
+The API remains SELECT-only.
 
 ### Daily schedule
 
@@ -210,7 +213,9 @@ Home (`/`) lists **séries** (`/api/series`). `/documentos` lists documents join
 | CETIP / ISIN | `series.codigo_cetip` / `series.isin` |
 
 Local development uses `python web/api/local.py` (port 8081) plus
-`python -m http.server 8080 --directory web`.
+`python -m http.server 8080 --directory web`. The local API enforces the same Basic
+Auth (`CATALOG_BASIC_USER` / `CATALOG_BASIC_PASSWORD`, defaulting to the deployed
+catalog credentials). Browsers prompt once; for curl use `-u admin:<password>`.
 
 ## Incremental & re-check behavior
 
