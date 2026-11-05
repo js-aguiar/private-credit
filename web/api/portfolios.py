@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from queries import _as_iso
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from shared.models import Carteira, Serie
-from queries import _as_iso
 
 
 def _serie_summary(serie: Serie) -> dict:
