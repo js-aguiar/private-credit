@@ -53,9 +53,12 @@ _EC2_BACKFILL_JITTER_SECONDS = 0.75
 _EC2_BACKFILL_MAX_RPM = 40.0
 
 
-def portal_link(codigo_opea: str) -> str:
-    """Public SPA URL for one série (``codigoOpea`` / ``id_origem``)."""
-    return f"{_PORTAL_BASE}/{(codigo_opea or '').strip()}"
+def portal_link(
+    codigo_cetip: str | None = None, *, codigo_opea: str | None = None
+) -> str:
+    """Public SPA URL for one série: prefer CETIP slug, else ``codigoOpea``."""
+    slug = (codigo_cetip or "").strip() or (codigo_opea or "").strip()
+    return f"{_PORTAL_BASE}/{slug}"
 
 
 def parent_codigo_opea(codigo_opea: str) -> str:
@@ -235,7 +238,7 @@ def serie_from_list_item(record: dict) -> SerieData | None:
         isin=isin,
         codigo_cetip=cetip,
         numero_emissao=str(numero) if numero is not None else None,
-        link=portal_link(codigo),
+        link=portal_link(cetip, codigo_opea=codigo),
         operacao=pick(record, "nomeDevedor", "apelidoOperacao"),
         devedor=pick(record, "nomeDevedor"),
         tipo_ativo=pick(record, "naturezaOperacao", "classe"),
@@ -292,7 +295,7 @@ def serie_from_detail(
         numero_emissao=numero_emissao
         if numero_emissao is not None
         else (str(detail.get("emissao")) if detail.get("emissao") is not None else None),
-        link=portal_link(codigo_opea),
+        link=portal_link(cetip, codigo_opea=codigo_opea),
         operacao=pick(detail, "apelidoOperacao")
         or pick(detail.get("emissor") or {}, "descricao"),
         valor=parse_volume(detail),
@@ -387,9 +390,10 @@ class OpeaScraper(BaseScraper):
         codigo = serie.id_origem
         detail = self._fetch_serie_detail(codigo)
         if not detail:
+            cetip = getattr(serie, "codigo_cetip", None)
             return DetailResult(
                 serie_updates={
-                    "link": portal_link(codigo),
+                    "link": portal_link(cetip, codigo_opea=codigo),
                     "extras": {"detalhe_acessivel": False},
                 },
                 series=[],
@@ -599,8 +603,9 @@ class OpeaScraper(BaseScraper):
 
     def _serie_updates(self, serie, detail: dict, mapped: SerieData | None) -> dict:
         codigo = serie.id_origem
+        cetip = getattr(serie, "codigo_cetip", None)
         updates: dict = {
-            "link": portal_link(codigo),
+            "link": portal_link(cetip, codigo_opea=codigo),
             "extras": {
                 "detalhe_acessivel": bool(detail),
                 "natureza": (serie.extras or {}).get("natureza")
@@ -628,7 +633,8 @@ class OpeaScraper(BaseScraper):
                     "data_vencimento": mapped.data_vencimento,
                     "quantidade": mapped.quantidade,
                     "operacao": mapped.operacao or serie.operacao,
-                    "link": mapped.link or portal_link(codigo),
+                    "link": mapped.link
+                    or portal_link(mapped.codigo_cetip or cetip, codigo_opea=codigo),
                 }
             )
         updates["extras"] = {
