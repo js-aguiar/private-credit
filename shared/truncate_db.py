@@ -141,3 +141,41 @@ def truncate_all_tables(config: ScraperConfig | None = None) -> TruncateSummary:
         },
     )
     return summary
+
+
+@dataclass
+class ResetDetalhesSummary:
+    fontes: list[str]
+    updated: int
+
+
+def reset_detalhes_coletados(
+    fontes: list[str], config: ScraperConfig | None = None
+) -> ResetDetalhesSummary:
+    """Mark séries for listed fontes as pending detail (``detalhes_coletados=false``)."""
+    cfg = config or ScraperConfig.from_env("admin")
+    engine = get_engine(cfg)
+    cleaned = sorted({(f or "").strip().lower() for f in fontes if (f or "").strip()})
+    if not cleaned:
+        raise ValueError("fontes is required")
+
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                UPDATE series
+                SET detalhes_coletados = false,
+                    atualizado_em = NOW()
+                WHERE fonte = ANY(:fontes)
+                """
+            ),
+            {"fontes": cleaned},
+        )
+        updated = int(result.rowcount or 0)
+
+    summary = ResetDetalhesSummary(fontes=cleaned, updated=updated)
+    logger.info(
+        "reset_detalhes_done",
+        extra={"fontes": cleaned, "updated": updated},
+    )
+    return summary
