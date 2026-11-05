@@ -181,10 +181,71 @@ def parse_detail(html: str, base_url: str) -> tuple[dict, list[DocumentoData]]:
             )
 
     updates: dict = {}
+    updates.update(_extract_emission_fields(soup))
     extras = _extract_labelled_fields(soup)
     if extras:
         updates["extras"] = extras
     return updates, documentos
+
+
+def _extract_emission_fields(soup) -> dict:
+    """Company, Valor (BRL), and Número da emissão from the detail header/table."""
+    updates: dict = {}
+
+    title = soup.select_one("h3.current__title")
+    img = soup.select_one(".current__image img")
+    devedor = clean_text(title.get_text(" ")) if title is not None else None
+    if not devedor and img is not None:
+        devedor = clean_text(img.get("alt"))
+    if devedor:
+        updates["devedor"] = devedor
+
+    valor_el = soup.select_one("#valor")
+    valor_text = clean_text(valor_el.get_text(" ")) if valor_el is not None else None
+    if not valor_text:
+        for td in soup.select("table.current__table td"):
+            strong = td.find("strong")
+            if strong is None:
+                continue
+            label = clean_text(strong.get_text(" ")) or ""
+            if label.rstrip(":").strip().lower() == "valor":
+                # Prefer nested #valor; else remaining cell text after the label.
+                nested = td.select_one("#valor")
+                if nested is not None:
+                    valor_text = clean_text(nested.get_text(" "))
+                else:
+                    valor_text = clean_text(td.get_text(" "))
+                    if valor_text and label in valor_text:
+                        valor_text = clean_text(valor_text.replace(label, "", 1))
+                break
+    amount = parse_brl_amount(valor_text) if valor_text else None
+    if amount is not None:
+        updates["valor_total"] = amount
+        updates["valor"] = amount
+
+    numero_raw: str | None = None
+    for td in soup.select("table.current__table td"):
+        strong = td.find("strong")
+        if strong is None:
+            continue
+        label = (clean_text(strong.get_text(" ")) or "").rstrip(":").strip().lower()
+        # Page uses "Número da emissão" (lowercase e).
+        if "número da emissão" in label or "numero da emissao" in label:
+            numero_raw = clean_text(td.get_text(" "))
+            if numero_raw and strong.get_text():
+                # Drop the label prefix from the cell text.
+                label_text = clean_text(strong.get_text(" ")) or ""
+                if label_text and numero_raw.startswith(label_text):
+                    numero_raw = clean_text(numero_raw[len(label_text) :])
+                elif label_text and label_text in numero_raw:
+                    numero_raw = clean_text(numero_raw.replace(label_text, "", 1))
+            break
+    if numero_raw:
+        digits = re.sub(r"[^0-9]", "", numero_raw)
+        if digits:
+            updates["numero_emissao"] = digits
+
+    return updates
 
 
 def _should_ignore_doc_url(url: str) -> bool:
@@ -258,10 +319,22 @@ def parse_series_from_detail(html: str, *, emissao_id: str | None = None) -> lis
     return series
 
 
-def merge_series_from_detail(baseline: list[SerieData], detail: list[SerieData]) -> list[SerieData]:
-    """Overlay detail-page fields onto list-derived séries."""
-    if not detail:
+def merge_series_from_detail(
+    baseline: list[SerieData],
+    detail: list[SerieData],
+    *,
+    emission: dict | None = None,
+) -> list[SerieData]:
+    """Overlay detail-page fields onto list-derived séries.
+
+    ``emission`` holds emission-level fields from the detail header/table
+    (``devedor``, ``valor_total``, ``valor``, ``numero_emissao``).
+    """
+    emission = emission or {}
+    if not detail and not emission:
         return baseline
+    if not baseline:
+        return detail
 
     by_numero = {serie.numero_serie: serie for serie in detail}
     by_cetip = {serie.codigo_cetip: serie for serie in detail if serie.codigo_cetip}
@@ -278,18 +351,24 @@ def merge_series_from_detail(baseline: list[SerieData], detail: list[SerieData])
                 emissao_id=base.emissao_id,
                 link=base.link,
                 numero_serie=base.numero_serie,
-                numero_emissao=base.numero_emissao,
+                numero_emissao=emission.get("numero_emissao") or base.numero_emissao,
                 codigo_cetip=(extra.codigo_cetip if extra else None) or base.codigo_cetip,
                 isin=(extra.isin if extra else None) or base.isin,
                 remuneracao=(extra.remuneracao if extra else None) or base.remuneracao,
                 indexador=(extra.indexador if extra else None) or base.indexador,
                 operacao=base.operacao,
-                devedor=base.devedor,
+                devedor=emission.get("devedor") or base.devedor,
                 ano_emissao=base.ano_emissao,
                 tipo_ativo=base.tipo_ativo,
                 series_raw=base.series_raw,
-                valor_total=base.valor_total,
-                valor=base.valor,
+                valor_total=(
+                    emission["valor_total"]
+                    if emission.get("valor_total") is not None
+                    else base.valor_total
+                ),
+                valor=(
+                    emission["valor"] if emission.get("valor") is not None else base.valor
+                ),
                 data_emissao=base.data_emissao,
                 data_vencimento=base.data_vencimento,
                 quantidade=base.quantidade,
@@ -302,7 +381,41 @@ def merge_series_from_detail(baseline: list[SerieData], detail: list[SerieData])
     for extra in detail:
         key = (extra.numero_serie, extra.codigo_cetip)
         if key not in seen:
-            merged.append(extra)
+            # Apply emission-level fields to newly discovered siblings too.
+            merged.append(
+                SerieData(
+                    fonte=extra.fonte or FONTE,
+                    id_origem=extra.id_origem,
+                    emissao_id=extra.emissao_id,
+                    link=extra.link,
+                    numero_serie=extra.numero_serie,
+                    numero_emissao=emission.get("numero_emissao") or extra.numero_emissao,
+                    codigo_cetip=extra.codigo_cetip,
+                    isin=extra.isin,
+                    remuneracao=extra.remuneracao,
+                    indexador=extra.indexador,
+                    operacao=extra.operacao,
+                    devedor=emission.get("devedor") or extra.devedor,
+                    ano_emissao=extra.ano_emissao,
+                    tipo_ativo=extra.tipo_ativo,
+                    series_raw=extra.series_raw,
+                    valor_total=(
+                        emission["valor_total"]
+                        if emission.get("valor_total") is not None
+                        else extra.valor_total
+                    ),
+                    valor=(
+                        emission["valor"]
+                        if emission.get("valor") is not None
+                        else extra.valor
+                    ),
+                    data_emissao=extra.data_emissao,
+                    data_vencimento=extra.data_vencimento,
+                    quantidade=extra.quantidade,
+                    rating=extra.rating,
+                    extras=extra.extras,
+                )
+            )
             seen.add(key)
     return merged
 
