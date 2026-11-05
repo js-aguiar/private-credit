@@ -34,7 +34,7 @@ _DEFAULT_BASIC_PASSWORD = "cloudf@990055"
 
 
 def _catalog_viewer_auth_function_code(*, username: str, password: str) -> str:
-    """CloudFront Function: Basic Auth + /documentos path rewrite."""
+    """CloudFront Function: Basic Auth + clean path rewrites."""
     token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
     # Keep the expected header value as a plain string literal (no template injection).
     expected = f"Basic {token}".replace("\\", "\\\\").replace("'", "\\'")
@@ -56,6 +56,9 @@ function handler(event) {{
   var uri = request.uri;
   if (uri === '/documentos' || uri === '/documentos/') {{
     request.uri = '/documentos.html';
+  }}
+  if (uri === '/portfolios' || uri === '/portfolios/') {{
+    request.uri = '/portfolios.html';
   }}
   return request;
 }}
@@ -130,19 +133,26 @@ class WebStack(Stack):
             self,
             "CatalogHttpApi",
             api_name=f"{prefix}-catalog",
-            description="Read-only document catalog API (Basic Auth)",
+            description="Document catalog API with portfolios (Basic Auth)",
         )
         integration = apigwv2_integrations.HttpLambdaIntegration(
             "CatalogIntegration", api_fn
         )
+        _api_methods = [
+            apigwv2.HttpMethod.GET,
+            apigwv2.HttpMethod.POST,
+            apigwv2.HttpMethod.PATCH,
+            apigwv2.HttpMethod.DELETE,
+            apigwv2.HttpMethod.OPTIONS,
+        ]
         http_api.add_routes(
             path="/api",
-            methods=[apigwv2.HttpMethod.GET, apigwv2.HttpMethod.OPTIONS],
+            methods=_api_methods,
             integration=integration,
         )
         http_api.add_routes(
             path="/api/{proxy+}",
-            methods=[apigwv2.HttpMethod.GET, apigwv2.HttpMethod.OPTIONS],
+            methods=_api_methods,
             integration=integration,
         )
         # Keep authenticated catalog traffic from flooding the shared t4g.micro RDS.
@@ -197,7 +207,7 @@ class WebStack(Stack):
                 "/api/*": cloudfront.BehaviorOptions(
                     origin=api_origin,
                     viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-                    allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+                    allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
                     cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
                     origin_request_policy=cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
                     function_associations=[
@@ -231,7 +241,12 @@ class WebStack(Stack):
             "CatalogHtmlDeploy",
             destination_bucket=bucket,
             distribution=distribution,
-            distribution_paths=["/", "/index.html", "/documentos.html"],
+            distribution_paths=[
+                "/",
+                "/index.html",
+                "/documentos.html",
+                "/portfolios.html",
+            ],
             cache_control=[
                 s3deploy.CacheControl.max_age(Duration.seconds(0)),
                 s3deploy.CacheControl.must_revalidate(),
@@ -245,6 +260,10 @@ class WebStack(Stack):
                 s3deploy.Source.data(
                     "documentos.html",
                     (WEB_DIR / "documentos.html").read_text(encoding="utf-8"),
+                ),
+                s3deploy.Source.data(
+                    "portfolios.html",
+                    (WEB_DIR / "portfolios.html").read_text(encoding="utf-8"),
                 ),
             ],
         )

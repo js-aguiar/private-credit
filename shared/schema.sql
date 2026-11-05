@@ -92,3 +92,15 @@ CREATE TABLE IF NOT EXISTS isin_contestados (
     fonte        VARCHAR(64),
     detectado_em TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Portfolios: one row per (portfolio name, série). Empty portfolios are never stored.
+CREATE TABLE IF NOT EXISTS carteiras (
+    carteira_id BIGSERIAL PRIMARY KEY,
+    nome        VARCHAR(255) NOT NULL,
+    serie_id    BIGINT       NOT NULL REFERENCES series (serie_id) ON DELETE CASCADE,
+    criado_em   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    CONSTRAINT uq_carteiras_nome_serie UNIQUE (nome, serie_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_carteiras_nome ON carteiras (nome);
+CREATE INDEX IF NOT EXISTS ix_carteiras_serie_id ON carteiras (serie_id);

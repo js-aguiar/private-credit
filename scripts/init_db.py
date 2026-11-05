@@ -23,7 +23,9 @@ def main() -> int:
     config = ScraperConfig.from_env("init_db")
     ensure_schema(config)
     logger.info("schema_ready")
-    print("Schema ensured (tables: series, documentos, documentos_series).")
+    print(
+        "Schema ensured (tables: series, documentos, documentos_series, carteiras)."
+    )
     return 0
 
 

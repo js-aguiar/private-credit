@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Portfolios</title>
+    <link rel="stylesheet" href="styles.css?v=20261105" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true"></span>
+        <div>
+          <h1>Portfolios</h1>
+          <p>Build and edit séries portfolios</p>
+        </div>
+      </div>
+      <div class="topbar-aside">
+        <nav class="site-nav" aria-label="Catalog sections">
+          <a href="/">Séries</a>
+          <a href="/documentos">Documentos</a>
+          <a class="active" href="/portfolios">Portfolios</a>
+        </nav>
+        <p class="count" id="result-count">Loading…</p>
+      </div>
+    </header>
+
+    <main class="portfolio-layout">
+      <section class="filters portfolio-panel" aria-label="Portfolio selector">
+        <label class="portfolio-select-label">
+          <span>Portfolio</span>
+          <select id="portfolio-select">
+            <option value="">Select a portfolio…</option>
+          </select>
+        </label>
+        <div class="portfolio-create">
+          <label>
+            <span>New portfolio</span>
+            <input id="portfolio-name" type="text" maxlength="255" placeholder="Unique name" autocomplete="off" />
+          </label>
+          <div class="filter-actions">
+            <button type="button" id="create-portfolio">Create</button>
+            <button type="button" class="ghost" id="delete-portfolio" hidden>Delete</button>
+          </div>
+        </div>
+        <p class="hint" id="draft-hint" hidden>
+          Draft — add at least one série to save this portfolio.
+        </p>
+      </section>
+
+      <section class="filters portfolio-panel" aria-label="Find séries">
+        <label class="portfolio-search-label">
+          <span>Search by CETIP or ISIN</span>
+          <input id="series-query" type="text" placeholder="e.g. CRA02200795 or BRECOACRAA72" autocomplete="off" />
+        </label>
+        <div class="filter-actions">
+          <button type="button" id="search-series">Search</button>
+          <button type="button" class="ghost" id="clear-search">Clear</button>
+        </div>
+        <div class="search-results" id="search-results" hidden></div>
+      </section>
+
+      <section class="list-card" aria-live="polite">
+        <div class="list-head list-head-portfolio">
+          <span>Company</span>
+          <span>Fonte</span>
+          <span>ISIN</span>
+          <span>CETIP</span>
+          <span></span>
+        </div>
+        <ul class="list" id="portfolio-series"></ul>
+        <p class="status" id="status" hidden></p>
+      </section>
+    </main>
+
+    <script src="portfolios.js?v=20261105"></script>
+  </body>
+</html>

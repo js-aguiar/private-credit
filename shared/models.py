@@ -158,3 +158,26 @@ class DocumentoSerie(Base):
     serie: Mapped["Serie"] = relationship(back_populates="documento_links")
 
     __table_args__ = (Index("ix_documentos_series_serie_id", "serie_id"),)
+
+
+class Carteira(Base):
+    """One row per portfolio/série membership (``carteiras``)."""
+
+    __tablename__ = "carteiras"
+
+    carteira_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    nome: Mapped[str] = mapped_column(String(255), nullable=False)
+    serie_id: Mapped[int] = mapped_column(
+        ForeignKey("series.serie_id", ondelete="CASCADE"), nullable=False
+    )
+    criado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    serie: Mapped["Serie"] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("nome", "serie_id", name="uq_carteiras_nome_serie"),
+        Index("ix_carteiras_nome", "nome"),
+        Index("ix_carteiras_serie_id", "serie_id"),
+    )

@@ -8,5 +8,6 @@ RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/requirements.txt
 COPY shared/ ${LAMBDA_TASK_ROOT}/shared/
 COPY web/api/handler.py ${LAMBDA_TASK_ROOT}/handler.py
 COPY web/api/queries.py ${LAMBDA_TASK_ROOT}/queries.py
+COPY web/api/portfolios.py ${LAMBDA_TASK_ROOT}/portfolios.py
 
 CMD ["handler.handler"]
