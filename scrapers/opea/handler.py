@@ -49,6 +49,18 @@ def handler(event, context):
         logger.info("table_counts_done", extra=payload)
         return {"statusCode": 200, "summary": payload}
 
+    if isinstance(event, dict) and event.get("action") == "reset_detalhes":
+        from shared.truncate_db import reset_detalhes_coletados
+
+        fontes = event.get("fontes") or event.get("fonte") or []
+        if isinstance(fontes, str):
+            fontes = [fontes]
+        logger.info("reset_detalhes_start", extra={"fontes": fontes})
+        summary = reset_detalhes_coletados(list(fontes))
+        payload = {"fontes": summary.fontes, "updated": summary.updated}
+        logger.info("reset_detalhes_done", extra=payload)
+        return {"statusCode": 200, "summary": payload}
+
     if isinstance(event, dict) and event.get("action") == "repair_documentos":
         from .repair_docs import run_repair_opea_documentos
 

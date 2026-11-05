@@ -60,6 +60,13 @@ class EcoagroScraper(BaseScraper):
         if html:
             page_updates, documentos = parse_detail(html, self.BASE_URL)
             detail_series = parse_series_from_detail(html, emissao_id=emissao_id)
+            extras = page_updates.pop("extras", None)
+            # Emission-level typed fields (devedor / valor / numero_emissao).
+            emission = {
+                key: page_updates[key]
+                for key in ("devedor", "valor_total", "valor", "numero_emissao")
+                if key in page_updates
+            }
             baseline_data = [
                 SerieData(
                     fonte=serie.fonte,
@@ -76,11 +83,13 @@ class EcoagroScraper(BaseScraper):
                     tipo_ativo=serie.tipo_ativo,
                     series_raw=serie.series_raw,
                     valor_total=serie.valor_total,
+                    valor=serie.valor,
                     extras=dict(serie.extras or {}),
                 )
             ]
-            sibling_series = merge_series_from_detail(baseline_data, detail_series)
-            extras = page_updates.pop("extras", None)
+            sibling_series = merge_series_from_detail(
+                baseline_data, detail_series, emission=emission
+            )
             updates.update(page_updates)
             merged_extras = {"detalhe_acessivel": True}
             if extras:

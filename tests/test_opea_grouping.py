@@ -90,6 +90,7 @@ def test_serie_from_list_item_maps_keys_and_parent():
     assert serie.codigo_cetip == "26H1942318"
     assert serie.numero_emissao == "624"
     assert serie.devedor == "LOG PRIME II"
+    assert serie.link == "https://app.opea.com.br/pt/emissoes/26H1942318"
 
 
 def test_serie_from_list_item_skips_without_keys():
@@ -130,6 +131,7 @@ def test_serie_from_detail_maps_string_remuneracao():
     assert serie.numero_serie == "1"
     assert serie.remuneracao == "CDI + 1,3000% a.a."
     assert serie.quantidade == 119000
+    assert serie.link == "https://app.opea.com.br/pt/emissoes/26H1942318"
     assert serie.extras["classe"] == "Única"
     assert serie.extras["segmento"] == "Logístico"
     assert serie.extras["agente_fiduciario"] == "Vortx DTVM"
